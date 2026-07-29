@@ -9,6 +9,7 @@ import org.springframework.ai.chat.client.advisor.PromptChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -20,10 +21,25 @@ public class TestRedisMemory {
 
     @TestConfiguration
     static class TestConfig {
+        @Value("${spring.ai.chat.memory.redis.port}")
+        private int port;
+        @Value("${spring.ai.chat.memory.redis.host}")
+        private String host;
+        @Value("${spring.ai.chat.memory.redis.password}")
+        private String password;
+        @Value("${spring.ai.chat.memory.redis.timeout}")
+        private int timeout;
         @Bean
-        Redis
+        public JedisRedisChatMemoryRepository chatMemoryRepository() {
+            return JedisRedisChatMemoryRepository.builder()
+                    .host(host)
+                    .port(port)
+                    .password(password)
+                    .timeout(timeout)
+                    .build();
+        }
         @Bean
-        public ChatMemory chatMemory(@Autowired RedisChatM chatMemoryRepository) {
+        public ChatMemory chatMemory(@Autowired JedisRedisChatMemoryRepository chatMemoryRepository) {
             return MessageWindowChatMemory
                     .builder()
                     .maxMessages(10)
