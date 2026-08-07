@@ -47,6 +47,7 @@ public class TestPrompt {
                 .system(p -> p.param("user", "俞偲笳").param("age", "25").param("gender", "男").param("occupation", "程序员"))
                 .call().content();
         logger.info(content);
+        System.out.println(content);
     }
 
 }

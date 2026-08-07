@@ -1,4 +1,4 @@
-package com.yusijia.chatclient;
+package com.yusijia.chatclient.memory;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

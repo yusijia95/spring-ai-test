@@ -1,4 +1,4 @@
-package com.yusijia.chatclient;
+package com.yusijia.chatclient.memory;
 
 import com.alibaba.cloud.ai.memory.redis.JedisRedisChatMemoryRepository;
 import org.junit.jupiter.api.BeforeEach;
