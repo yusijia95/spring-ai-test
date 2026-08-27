@@ -28,6 +28,7 @@
         <module>chat-client</module>
         <module>more-module-structurted-output</module>
         <module>tools</module>
+        <module>house-client-services</module>
     </modules>
     <dependencies>
         <dependency>

@@ -12,7 +12,10 @@ public class ToolController {
     ChatClient build;
 
     public ToolController(ChatClient.Builder builder, ToolService toolService) {
-        build = builder.defaultOptions(ChatOptions.builder().temperature(1.4d).build()).defaultTools(toolService).build();
+        build = builder.defaultOptions(ChatOptions.builder().temperature(1.4d).build())
+//                .defaultTools(toolService)
+                .defaultToolCallbacks(toolService.getToolCallbacks(toolService))
+                .build();
     }
 
     @RequestMapping(value = "/tool",method = RequestMethod.GET,produces = "text/stream;charset=UTF-8")
