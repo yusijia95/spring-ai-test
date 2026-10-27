@@ -1,9 +1,10 @@
 package com.yusijia.houseclientservices.controller;
 
-import com.yusijia.houseclientservices.domain.Subscription;
-import com.yusijia.houseclientservices.store.SubscriptionStore;
+import com.yusijia.houseclientservices.domain.view.SubscriptionView;
+import com.yusijia.houseclientservices.service.SubscriptionService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -12,14 +13,20 @@ import java.util.List;
 @RequestMapping("/api/subscriptions")
 public class SubscriptionController {
 
-    private final SubscriptionStore subscriptionStore;
+    private final SubscriptionService subscriptionService;
 
-    public SubscriptionController(SubscriptionStore subscriptionStore) {
-        this.subscriptionStore = subscriptionStore;
+    public SubscriptionController(SubscriptionService subscriptionService) {
+        this.subscriptionService = subscriptionService;
     }
 
     @GetMapping
-    public List<Subscription> list() {
-        return subscriptionStore.findAll();
+    public List<SubscriptionView> list() {
+        return subscriptionService.list();
+    }
+
+    @GetMapping("/search")
+    public List<SubscriptionView> search(@RequestParam(required = false) String houseLocation,
+                                         @RequestParam(required = false) String buyerName) {
+        return subscriptionService.find(houseLocation, buyerName);
     }
 }
