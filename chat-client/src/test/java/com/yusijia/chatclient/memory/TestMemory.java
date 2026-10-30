@@ -1,0 +1,70 @@
+package com.yusijia.chatclient.memory;
+
+import com.yusijia.chatclient.RereadAdvisor;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.PromptChatMemoryAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.ChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+
+@SpringBootTest
+public class TestMemory {
+
+    private static final Logger logger = org.slf4j.LoggerFactory.getLogger(TestMemory.class);
+
+    @Test
+    public void testMemory(@Autowired ChatClient.Builder chatClientBuilder) {
+        ChatClient client = chatClientBuilder
+                .defaultAdvisors(new RereadAdvisor()).build();
+        String content = client.prompt().user("你好，我叫俞偲笳")
+                .call().content();
+        String content2 = client.prompt().user("你好，我叫什么")
+                .call().content();
+        logger.info(content);
+        logger.info(content2);
+    }
+
+    ChatClient client;
+
+    @BeforeEach
+    public void init(@Autowired ChatClient.Builder chatClientBuilder, @Autowired ChatMemory chatMemory) {
+        client = chatClientBuilder
+                .defaultAdvisors(PromptChatMemoryAdvisor.builder(chatMemory).build()).build();
+    }
+
+    @Test
+    public void testAdvisorMemory() {
+        String content = client.prompt().user("你好，我叫俞偲笳")
+                .advisors(p->p.param(ChatMemory.CONVERSATION_ID,"1"))
+                .call().content();
+        String content2 = client.prompt().user("你好，我叫什么")
+                .advisors(p->p.param(ChatMemory.CONVERSATION_ID,"1"))
+                .call().content();
+        String content3 = client.prompt().user("你好，我叫什么")
+                .advisors(p->p.param(ChatMemory.CONVERSATION_ID,"2"))
+                .call().content();
+        logger.info(content);
+        logger.info(content2);
+        logger.info(content3);
+    }
+
+    @TestConfiguration
+    static class TestConfig {
+        @Bean
+        public ChatMemory chatMemory(ChatMemoryRepository chatMemoryRepository) {
+            return MessageWindowChatMemory
+                    .builder()
+                    .maxMessages(10)
+                    .chatMemoryRepository(chatMemoryRepository)
+                    .build();
+        }
+    }
+
+}
