@@ -13,8 +13,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -52,12 +55,6 @@ public class SubscriptionTools {
     @Tool(description = "按关键字查询房屋。生成认购前必须先调用本工具获取真实房屋ID。关键字可以是坐落片段，如“文一西路”“1幢101”；留空则列出前20套。")
     public String searchHouse(
             @ToolParam(description = "房屋坐落关键字，可为空", required = false) String keyword) {
-        // #region agent log
-        try (java.io.FileWriter fw = new java.io.FileWriter("D:\\ideaSpace\\study\\spring-ai-test\\debug-be087e.log", true)) {
-            fw.write("{\"sessionId\":\"be087e\",\"runId\":\"pre-fix\",\"hypothesisId\":\"H5\",\"location\":\"SubscriptionTools.java:searchHouse\",\"message\":\"searchHouse invoked\",\"timestamp\":" + System.currentTimeMillis() + ",\"data\":{\"keyword\":\"" + (keyword == null ? "" : keyword.replace("\"", "'")) + "\"}}\n");
-        } catch (Exception ignored) {
-        }
-        // #endregion
         List<HouseView> houses = masterDataService.searchHouses(keyword);
         if (houses.isEmpty()) {
             return "未找到匹配的房屋。请让客户提供更精确的坐落（如小区名、幢号、房号）。";
@@ -73,11 +70,15 @@ public class SubscriptionTools {
 
     @Tool(description = "按姓名或证件号码查询个人客户。生成认购前必须先调用本工具获取真实客户ID。")
     public String searchPerson(
-            @ToolParam(description = "客户姓名以及完整证件号码") String keyword) {
+            @ToolParam(description = "客户姓名，或完整证件号码；只传其中一项，不要拼接") String keyword) {
         if (!StringUtils.hasText(keyword)) {
             return "请提供客户姓名或证件号码。";
         }
         List<PersonView> persons = masterDataService.searchPersons(keyword);
+        if (persons.isEmpty()) {
+            // 模型常把"姓名 + 证件号码"一起传进来，拆开逐个再试一次
+            persons = searchByTokens(keyword);
+        }
         if (persons.isEmpty()) {
             return "未找到匹配的个人客户。该客户可能尚未建档，请让客户确认姓名和证件号码。";
         }
@@ -87,6 +88,20 @@ public class SubscriptionTools {
                         + "，证件号码=" + item.idNoMasked()
                         + "，电话=" + (item.phone() == null ? "未登记" : item.phone()))
                 .collect(Collectors.joining("\n"));
+    }
+
+    /** 把"张三 330106199001011234"这类拼接输入拆成单个关键字，逐个查询并按 ID 去重合并 */
+    private List<PersonView> searchByTokens(String keyword) {
+        Map<String, PersonView> merged = new LinkedHashMap<>();
+        for (String token : keyword.split("[\\s,，;；/、]+")) {
+            if (!StringUtils.hasText(token)) {
+                continue;
+            }
+            for (PersonView person : masterDataService.searchPersons(token)) {
+                merged.putIfAbsent(person.id(), person);
+            }
+        }
+        return new ArrayList<>(merged.values());
     }
 
     @Tool(description = "按名称查询单位客户（开发企业、物业等）。企业名义购房前必须先调用本工具获取真实单位ID。")

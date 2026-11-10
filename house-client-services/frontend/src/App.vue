@@ -1,18 +1,42 @@
 <script setup>
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 const conversationId = crypto.randomUUID()
 const subscriptions = ref([])
 const messages = ref([
   {
     role: 'assistant',
-    content: '您好，我是房产客服。可以帮您办理认购或撤销认购。办理认购请提供房屋坐落、购买方姓名和证件号码。',
+    content: '您好，我是房产客服。可以帮您办理认购、撤销认购，也可以查询楼盘价格和周边配套。办理认购请提供房屋坐落、购买方姓名和证件号码。',
   },
 ])
 const input = ref('')
 const sending = ref(false)
 const listError = ref('')
 const chatList = ref(null)
+
+// Drawer state
+const drawerOpen = ref(false)
+const drawerRef = ref(null)
+const toggleBtn = ref(null)
+
+function openDrawer() {
+  drawerOpen.value = true
+  nextTick(() => {
+    scrollToBottom(true)
+    if (drawerRef.value) {
+      const textarea = drawerRef.value.querySelector('textarea')
+      const fallback = textarea || drawerRef.value.querySelector('button')
+      if (fallback) fallback.focus()
+    }
+  })
+}
+
+function closeDrawer() {
+  drawerOpen.value = false
+  if (toggleBtn.value) toggleBtn.value.focus()
+}
 
 function maskIdNo(idNo) {
   if (!idNo) {
@@ -63,12 +87,46 @@ async function loadSubscriptions() {
   }
 }
 
-async function scrollToBottom() {
-  await nextTick()
-  if (chatList.value) {
-    chatList.value.scrollTop = chatList.value.scrollHeight
-  }
+function isNearBottom() {
+  const el = chatList.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 48
 }
+
+// 用"是否跟随到底"的标记，而不是每次重新量几何位置：
+// 内容变高后几何距离会瞬间超过阈值，只看几何会导致长回复永远不再跟随。
+const stickToBottom = ref(true)
+
+function onMessagesScroll() {
+  stickToBottom.value = isNearBottom()
+}
+
+function scrollToBottom(force = false) {
+  nextTick(() => {
+    if (chatList.value && (force || stickToBottom.value)) {
+      chatList.value.scrollTop = chatList.value.scrollHeight
+      stickToBottom.value = true
+    }
+  })
+}
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  const raw = marked.parse(text) || ''
+  return DOMPurify.sanitize(String(raw))
+}
+
+// Memoized markdown HTML per message index — recomputes only when messages change
+const markdownMap = computed(() => {
+  const map = {}
+  for (let i = 0; i < messages.value.length; i++) {
+    const msg = messages.value[i]
+    if (msg.role === 'assistant') {
+      map[i] = renderMarkdown(msg.content)
+    }
+  }
+  return map
+})
 
 async function sendMessage() {
   const text = input.value.trim()
@@ -77,10 +135,13 @@ async function sendMessage() {
   }
   messages.value.push({ role: 'user', content: text })
   input.value = ''
-  const assistant = { role: 'assistant', content: '' }
+  // 必须是 reactive：直接改裸对象的 content 不会触发 markdownMap 这个 computed 重算，
+  // 流式过程中气泡会一直是空的。
+  const assistant = reactive({ role: 'assistant', content: '' })
   messages.value.push(assistant)
   sending.value = true
-  await scrollToBottom()
+  stickToBottom.value = true
+  scrollToBottom(true)
 
   try {
     const response = await fetch('/api/agent/chat', {
@@ -125,33 +186,65 @@ function parseSse(buffer) {
   const rest = parts.pop() ?? ''
   for (const part of parts) {
     const lines = part.split('\n')
+    let dataLines = []
     for (const line of lines) {
       if (line.startsWith('data:')) {
-        payloads.push(line.slice(5).trimStart())
+        dataLines.push(line.slice(5))
       }
+    }
+    if (dataLines.length > 0) {
+      payloads.push(dataLines.join('\n'))
     }
   }
   return { payloads, rest }
 }
 
-onMounted(loadSubscriptions)
+function handleKeydown(e) {
+  if (e.key === 'Escape' && drawerOpen.value) {
+    closeDrawer()
+  }
+}
+
+onMounted(() => {
+  loadSubscriptions()
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <template>
   <div class="layout">
-    <!-- 左侧：认购列表 -->
+    <!-- 认购列表：始终全屏 -->
     <aside class="panel list-panel">
       <header class="panel-header">
         <h2>已生成认购</h2>
-        <button class="btn-refresh" type="button" @click="loadSubscriptions">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21.5 2v6h-6"/>
-            <path d="M2.5 22v-6h6"/>
-            <path d="M2.5 12a10 10 0 0 1 17.5-6.5"/>
-            <path d="M21.5 12a10 10 0 0 1-17.5 6.5"/>
-          </svg>
-          刷新
-        </button>
+        <div class="header-right">
+          <button class="btn-refresh" type="button" @click="loadSubscriptions">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.5 2v6h-6"/>
+              <path d="M2.5 22v-6h6"/>
+              <path d="M2.5 12a10 10 0 0 1 17.5-6.5"/>
+              <path d="M21.5 12a10 10 0 0 1-17.5 6.5"/>
+            </svg>
+            刷新
+          </button>
+          <button
+            ref="toggleBtn"
+            type="button"
+            class="btn-agent"
+            @click="openDrawer"
+            :aria-expanded="drawerOpen"
+            aria-label="打开房产客服智能体"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            智能体
+          </button>
+        </div>
       </header>
 
       <div v-if="listError" class="empty-state" role="alert">
@@ -170,7 +263,7 @@ onMounted(loadSubscriptions)
           <line x1="15" y1="9" x2="9" y2="15"/>
         </svg>
         <p>暂无认购业务</p>
-        <span>可通过右侧智能体办理</span>
+        <span>点击右上角「智能体」办理</span>
       </div>
 
       <ul v-else class="cards">
@@ -214,48 +307,89 @@ onMounted(loadSubscriptions)
         </li>
       </ul>
     </aside>
-
-    <!-- 右侧：聊天窗口 -->
-    <section class="panel chat-panel">
-      <header class="panel-header">
-        <h2>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-          房产客服智能体
-        </h2>
-      </header>
-      <div ref="chatList" class="messages">
-        <div
-          v-for="(msg, index) in messages"
-          :key="index"
-          class="bubble"
-          :class="msg.role"
-        >
-          {{ msg.content }}
-        </div>
-      </div>
-      <form class="composer" @submit.prevent="sendMessage">
-        <textarea
-          v-model="input"
-          rows="2"
-          placeholder="例如：帮我认购朝阳路88号2单元301，购买人张三，身份证 110101199001011234"
-          :disabled="sending"
-          @keydown.enter.exact.prevent="sendMessage"
-        />
-        <button type="submit" :disabled="sending || !input.trim()">
-          {{ sending ? '办理中' : '发送' }}
-        </button>
-      </form>
-    </section>
   </div>
+
+  <!-- Drawer 抽屉：Teleport 到 body -->
+  <Teleport to="body">
+    <Transition name="overlay">
+      <!-- 半透明遮罩 -->
+      <div
+        v-if="drawerOpen"
+        class="drawer-overlay"
+        @click="closeDrawer"
+        @keydown.escape="closeDrawer"
+      />
+    </Transition>
+
+    <Transition name="drawer-slide">
+      <!-- 滑出抽屉 -->
+      <aside
+        v-if="drawerOpen"
+        ref="drawerRef"
+        class="drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="房产客服智能体"
+      >
+        <!-- 抽屉头部 -->
+        <header class="drawer-header">
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            房产客服智能体
+          </h2>
+          <button
+            type="button"
+            class="btn-close"
+            @click="closeDrawer"
+            aria-label="关闭智能体"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </header>
+
+        <!-- 消息列表 -->
+        <div ref="chatList" class="messages" @scroll.passive="onMessagesScroll">
+          <div
+            v-for="(msg, index) in messages"
+            :key="index"
+            class="bubble"
+            :class="msg.role"
+          >
+            <!-- 助手消息：渲染 Markdown -->
+            <div v-if="msg.role === 'assistant'" class="bubble-content" v-html="markdownMap[index]" />
+            <!-- 用户消息：纯文本 -->
+            <span v-else>{{ msg.content }}</span>
+          </div>
+        </div>
+
+        <!-- 输入区域 -->
+        <form class="composer" @submit.prevent="sendMessage">
+          <textarea
+            v-model="input"
+            rows="2"
+            placeholder="例如：江宁区有哪些在售楼盘 / 华侨路37号周边环境 / 认购文一西路100号1幢101室"
+            :disabled="sending"
+            @keydown.enter.exact.prevent="sendMessage"
+          />
+          <button type="submit" :disabled="sending || !input.trim()">
+            {{ sending ? '办理中' : '发送' }}
+          </button>
+        </form>
+      </aside>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>
 /* ========== Layout ========== */
 .layout {
   display: grid;
-  grid-template-columns: 60% 40%;
+  grid-template-columns: 1fr;
   height: 100%;
   gap: 16px;
   padding: 16px;
@@ -270,7 +404,7 @@ onMounted(loadSubscriptions)
   overflow: hidden;
 }
 
-/* ========== Panel Header ========== */
+/* ========== Header ========== */
 .panel-header {
   display: flex;
   align-items: center;
@@ -285,17 +419,15 @@ onMounted(loadSubscriptions)
   font-size: 16px;
   font-weight: 600;
   color: #1a1a2e;
+}
+
+.header-right {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 
-.panel-header h2 svg {
-  flex-shrink: 0;
-  opacity: 0.6;
-}
-
-/* ========== Refresh Button ========== */
+/* ========== Buttons ========== */
 .btn-refresh {
   display: flex;
   align-items: center;
@@ -314,6 +446,36 @@ onMounted(loadSubscriptions)
 .btn-refresh:hover {
   background: #e4e6ea;
   color: #333;
+}
+
+/* 智能体按钮 */
+.btn-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  border-radius: 10px;
+  padding: 7px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+}
+
+.btn-agent:hover {
+  background: #1d4ed8;
+}
+
+.btn-agent:active {
+  transform: scale(0.96);
+}
+
+.btn-agent svg {
+  flex-shrink: 0;
 }
 
 /* ========== Empty / Error State ========== */
@@ -359,7 +521,6 @@ onMounted(loadSubscriptions)
   margin-bottom: 0;
 }
 
-/* --- Card Head: location + status badge --- */
 .card-head {
   display: flex;
   align-items: center;
@@ -410,7 +571,6 @@ onMounted(loadSubscriptions)
   color: #92400e;
 }
 
-/* --- Price Row --- */
 .price-row {
   display: flex;
   align-items: baseline;
@@ -432,7 +592,6 @@ onMounted(loadSubscriptions)
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Info Row --- */
 .info-row {
   display: flex;
   align-items: baseline;
@@ -454,7 +613,6 @@ onMounted(loadSubscriptions)
   white-space: nowrap;
 }
 
-/* --- Buyers Section --- */
 .buyers-section {
   display: flex;
   flex-direction: column;
@@ -488,7 +646,6 @@ onMounted(loadSubscriptions)
   color: #444;
 }
 
-/* --- Card Footer --- */
 .card-footer {
   display: flex;
   align-items: baseline;
@@ -508,7 +665,97 @@ onMounted(loadSubscriptions)
   flex-shrink: 0;
 }
 
-/* ========== Chat Panel ========== */
+/* ========== Drawer ========== */
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 9998;
+}
+
+.overlay-enter-active,
+.overlay-leave-active {
+  transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.overlay-enter-from,
+.overlay-leave-to {
+  opacity: 0;
+}
+
+.drawer {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: min(460px, calc(100vw - 32px));
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 9999;
+}
+
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(110%);
+  opacity: 0;
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #f0f2f5;
+  flex-shrink: 0;
+}
+
+.drawer-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a2e;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.drawer-header h2 svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.btn-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: #f0f2f5;
+  color: #666;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.btn-close:hover {
+  background: #e4e6ea;
+  color: #333;
+}
+
+/* ========== Messages ========== */
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -522,7 +769,6 @@ onMounted(loadSubscriptions)
   max-width: 82%;
   padding: 10px 14px;
   border-radius: 14px;
-  white-space: pre-wrap;
   line-height: 1.6;
   font-size: 14px;
   word-break: break-word;
@@ -533,6 +779,7 @@ onMounted(loadSubscriptions)
   background: #2563eb;
   color: #fff;
   border-bottom-right-radius: 4px;
+  white-space: pre-wrap;
 }
 
 .bubble.assistant {
@@ -540,8 +787,109 @@ onMounted(loadSubscriptions)
   background: #f3f4f6;
   color: #1f2937;
   border-bottom-left-radius: 4px;
+  max-width: 92%;
 }
 
+/* Markdown rendered content inside assistant bubbles */
+.bubble-content {
+  overflow-wrap: break-word;
+}
+
+.bubble-content :deep(p) {
+  margin: 0 0 0.6em;
+}
+
+.bubble-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.bubble-content :deep(ul),
+.bubble-content :deep(ol) {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+
+.bubble-content :deep(li) {
+  margin-bottom: 0.2em;
+}
+
+/* marked 对"松散列表"会在 li 里包 <p>，默认段落间距会把列表拉得很散 */
+.bubble-content :deep(li > p) {
+  margin: 0 0 0.2em;
+}
+
+.bubble-content :deep(li > ul),
+.bubble-content :deep(li > ol) {
+  margin: 0.2em 0 0.3em;
+}
+
+.bubble-content :deep(strong) {
+  font-weight: 600;
+}
+
+.bubble-content :deep(h1),
+.bubble-content :deep(h2),
+.bubble-content :deep(h3) {
+  margin: 0.6em 0 0.3em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.bubble-content :deep(h1) { font-size: 1.15em; }
+.bubble-content :deep(h2) { font-size: 1.05em; }
+.bubble-content :deep(h3) { font-size: 1em; }
+
+.bubble-content :deep(code) {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.bubble-content :deep(pre) {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+
+.bubble-content :deep(pre code) {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.bubble-content :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+  font-size: 13px;
+}
+
+.bubble-content :deep(th),
+.bubble-content :deep(td) {
+  border: 1px solid #d1d5db;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.bubble-content :deep(th) {
+  background: rgba(0, 0, 0, 0.04);
+  font-weight: 600;
+}
+
+.bubble-content :deep(tr:nth-child(even)) {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.bubble-content :deep(a) {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+/* ========== Composer ========== */
 .composer {
   display: flex;
   gap: 10px;
@@ -584,6 +932,7 @@ button[type='submit'] {
   transition: background 0.15s;
   font-family: inherit;
   height: 42px;
+  flex-shrink: 0;
 }
 
 button[type='submit']:hover:not(:disabled) {
@@ -598,13 +947,21 @@ button[type='submit']:disabled {
 /* ========== Responsive ========== */
 @media (max-width: 900px) {
   .layout {
-    grid-template-columns: 1fr;
     height: auto;
+    min-height: 100%;
   }
 
-  .list-panel,
-  .chat-panel {
+  .list-panel {
     min-height: 420px;
+  }
+
+  .drawer {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100vw;
+    border-radius: 0;
   }
 }
 </style>

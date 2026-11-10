@@ -205,7 +205,7 @@ public final class BaiduMapToolGuard {
 
     /**
      * 将 map_search_places 的原始 JSON 结果格式化为 LLM 可读的纯文本。
-     * 最多返回 8 条结果，含名称、类别、地址、距离。
+     * 最多返回 5 条结果，含名称、类别、地址、距离。
      * 如果输入已不是 JSON（如多查询合并后的格式化文本），直接返回不做处理。
      */
     public static String formatSearchPlacesOutput(String input) {
@@ -224,7 +224,8 @@ public final class BaiduMapToolGuard {
                 return "未找到相关地点。";
             }
 
-            int limit = Math.min(8, results.size());
+            // 每类最多 5 条：模型不一定遵守提示词里的"最多 5 条"，这里做确定性截断
+            int limit = Math.min(5, results.size());
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < limit; i++) {
                 JsonNode item = results.get(i);
@@ -240,6 +241,11 @@ public final class BaiduMapToolGuard {
                     addr = detail.path("address").asText("");
                 }
                 if (!addr.isBlank()) {
+                    // 公交站的 address 是线路串，全列出来会把回复撑成一堵墙，只留前 3 条
+                    if (type.contains("公交") && addr.split(";").length > 3) {
+                        String[] lines = addr.split(";");
+                        addr = String.join(";", lines[0], lines[1], lines[2]) + "等";
+                    }
                     parts.add(addr);
                 }
 
@@ -258,6 +264,101 @@ public final class BaiduMapToolGuard {
             // 输入不是 JSON（如已格式化文本），直接返回不做处理
             return truncate(input, 1200);
         }
+    }
+
+    /**
+     * 起点与终点坐标相同时直接拦下。
+     * <p>
+     * 这是路线规划最容易翻车的点：模型连续对起点、终点做地理编码，然后把最后一次的坐标
+     * 同时填进 origin 和 destination，工具会返回一堆"原地不动"的方案。
+     * 与其让模型自己发现，不如在这里确定性地拒绝并给出纠正方式。
+     *
+     * @return 拦截提示；输入正常时返回 null
+     */
+    public static String directionsGuard(String toolInput) {
+        if (toolInput == null || toolInput.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = MAPPER.readTree(toolInput);
+            String origin = node.path("origin").asText("").trim();
+            String destination = node.path("destination").asText("").trim();
+            if (!origin.isEmpty() && origin.equals(destination)) {
+                return "起点与终点坐标相同（" + origin + "），无法规划路线。"
+                        + "请分别对起点、终点调用 map_geocode，把两个不同的坐标分别填入 origin 和 destination 后重试。";
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    /**
+     * 将 map_directions 的原始 JSON 压缩成模型可读的行程文本。
+     * <p>
+     * 原始响应含每个方案的完整 path 折线（几十 KB），直接喂给模型会挤爆上下文；
+     * 这里只保留方案级的距离/耗时/票价和每一段的 instruction，最多 3 个方案。
+     * instruction 本身就是百度给的中文行程描述（"XX站乘地铁S1号线经过1站到XX站"），
+     * 直接转述比我们二次拼接更准确。
+     */
+    public static String formatDirectionsOutput(String rawJson) {
+        if (rawJson == null || rawJson.isBlank()) {
+            return rawJson;
+        }
+        try {
+            JsonNode root = MAPPER.readTree(rawJson);
+            int status = root.path("status").asInt(1);
+            if (status != 0) {
+                return "路线规划失败（status=" + status + "）：" + root.path("message").asText("未知错误")
+                        + "，原始响应：" + truncate(rawJson, 300);
+            }
+            JsonNode routes = root.path("result").path("routes");
+            if (!routes.isArray() || routes.isEmpty()) {
+                return "未查到可用路线。";
+            }
+            int limit = Math.min(3, routes.size());
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < limit; i++) {
+                JsonNode route = routes.get(i);
+                if (i > 0) {
+                    sb.append('\n');
+                }
+                sb.append("方案").append(i + 1).append("：全程")
+                        .append(formatMeters(route.path("distance").asInt(0))).append("，")
+                        .append(formatSeconds(route.path("duration").asInt(0)));
+                int price = route.path("price").asInt(0);
+                if (price > 0) {
+                    sb.append("，票价").append(price).append("元");
+                }
+                sb.append('\n');
+                for (JsonNode step : route.path("steps")) {
+                    String instruction = step.path("instruction").asText("").trim();
+                    if (instruction.isEmpty()) {
+                        int distance = step.path("distance").asInt(0);
+                        if (distance <= 0) {
+                            continue;
+                        }
+                        instruction = "步行" + formatMeters(distance);
+                    }
+                    sb.append("- ").append(instruction).append('\n');
+                }
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            return truncate(rawJson, 1200);
+        }
+    }
+
+    private static String formatMeters(int meters) {
+        return meters < 1000 ? meters + "米" : String.format("%.1f公里", meters / 1000.0);
+    }
+
+    private static String formatSeconds(int seconds) {
+        int minutes = Math.max(1, (int) Math.round(seconds / 60.0));
+        if (minutes < 60) {
+            return "约" + minutes + "分钟";
+        }
+        int rest = minutes % 60;
+        return rest == 0 ? "约" + minutes / 60 + "小时" : "约" + minutes / 60 + "小时" + rest + "分钟";
     }
 
     /**

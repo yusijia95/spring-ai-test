@@ -1,0 +1,250 @@
+{
+    "status":  0,
+    "message":  "ok",
+    "result":  {
+                   "routes":  [
+                                  {
+                                      "distance":  35111,
+                                      "duration":  5703,
+                                      "price":  6,
+                                      "steps":  [
+                                                    {
+                                                        "distance":  1752,
+                                                        "duration":  1497,
+                                                        "type":  5,
+                                                        "instruction":  "步行1.8公里",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  4710,
+                                                        "duration":  300,
+                                                        "type":  3,
+                                                        "instruction":  "正方中路站(1口)乘地铁S1号线(南京南站方向)经过1站到吉印大道站",
+                                                        "vehicle":  {
+                                                                        "name":  "地铁S1号线",
+                                                                        "start_name":  "正方中路站(1口)",
+                                                                        "end_name":  "吉印大道站",
+                                                                        "stop_num":  1,
+                                                                        "type":  1
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  231,
+                                                        "duration":  193,
+                                                        "type":  5,
+                                                        "instruction":  "站厅换乘 步行231米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  27652,
+                                                        "duration":  2760,
+                                                        "type":  3,
+                                                        "instruction":  "吉印大道站乘地铁5号线(方家营方向)经过19站到上海路·省中医院站(1口)",
+                                                        "vehicle":  {
+                                                                        "name":  "地铁5号线",
+                                                                        "start_name":  "吉印大道站",
+                                                                        "end_name":  "上海路·省中医院站(1口)",
+                                                                        "stop_num":  19,
+                                                                        "type":  1
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  766,
+                                                        "duration":  653,
+                                                        "type":  5,
+                                                        "instruction":  "步行766米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    }
+                                                ]
+                                  },
+                                  {
+                                      "distance":  31053,
+                                      "duration":  5496,
+                                      "price":  6,
+                                      "steps":  [
+                                                    {
+                                                        "distance":  1752,
+                                                        "duration":  1497,
+                                                        "type":  5,
+                                                        "instruction":  "步行1.8公里",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  15169,
+                                                        "duration":  1080,
+                                                        "type":  3,
+                                                        "instruction":  "正方中路站(1口)乘地铁S1号线(南京南站方向)经过4站到南京南站",
+                                                        "vehicle":  {
+                                                                        "name":  "地铁S1号线",
+                                                                        "start_name":  "正方中路站(1口)",
+                                                                        "end_name":  "南京南站",
+                                                                        "stop_num":  4,
+                                                                        "type":  1
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  426,
+                                                        "duration":  355,
+                                                        "type":  5,
+                                                        "instruction":  "站厅换乘 步行426米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  12740,
+                                                        "duration":  1440,
+                                                        "type":  3,
+                                                        "instruction":  "南京南站乘地铁1号线(八卦洲大桥南方向)经过9站到珠江路站(1口)",
+                                                        "vehicle":  {
+                                                                        "name":  "地铁1号线",
+                                                                        "start_name":  "南京南站",
+                                                                        "end_name":  "珠江路站(1口)",
+                                                                        "stop_num":  9,
+                                                                        "type":  1
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  966,
+                                                        "duration":  824,
+                                                        "type":  5,
+                                                        "instruction":  "步行966米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    }
+                                                ]
+                                  },
+                                  {
+                                      "distance":  32649,
+                                      "duration":  5788,
+                                      "price":  8,
+                                      "steps":  [
+                                                    {
+                                                        "distance":  730,
+                                                        "duration":  625,
+                                                        "type":  5,
+                                                        "instruction":  "步行730米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  2440,
+                                                        "duration":  416,
+                                                        "type":  3,
+                                                        "instruction":  "正方中路·迈瑞路站乘879路(正方中路客运站方向)经过2站到正方中路客运站",
+                                                        "vehicle":  {
+                                                                        "name":  "879路",
+                                                                        "start_name":  "正方中路·迈瑞路站",
+                                                                        "end_name":  "正方中路客运站",
+                                                                        "stop_num":  2,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  178,
+                                                        "duration":  148,
+                                                        "type":  5,
+                                                        "instruction":  "步行178米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  15169,
+                                                        "duration":  1080,
+                                                        "type":  3,
+                                                        "instruction":  "正方中路站(2口)乘地铁S1号线(南京南站方向)经过4站到南京南站",
+                                                        "vehicle":  {
+                                                                        "name":  "地铁S1号线",
+                                                                        "start_name":  "正方中路站(2口)",
+                                                                        "end_name":  "南京南站",
+                                                                        "stop_num":  4,
+                                                                        "type":  1
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  426,
+                                                        "duration":  355,
+                                                        "type":  5,
+                                                        "instruction":  "站厅换乘 步行426米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  12740,
+                                                        "duration":  1440,
+                                                        "type":  3,
+                                                        "instruction":  "南京南站乘地铁1号线(八卦洲大桥南方向)经过9站到珠江路站(1口)",
+                                                        "vehicle":  {
+                                                                        "name":  "地铁1号线",
+                                                                        "start_name":  "南京南站",
+                                                                        "end_name":  "珠江路站(1口)",
+                                                                        "stop_num":  9,
+                                                                        "type":  1
+                                                                    }
+                                                    },
+                                                    {
+                                                        "distance":  966,
+                                                        "duration":  824,
+                                                        "type":  5,
+                                                        "instruction":  "步行966米",
+                                                        "vehicle":  {
+                                                                        "name":  "",
+                                                                        "start_name":  "",
+                                                                        "end_name":  "",
+                                                                        "stop_num":  0,
+                                                                        "type":  0
+                                                                    }
+                                                    }
+                                                ]
+                                  }
+                              ]
+               }
+}
