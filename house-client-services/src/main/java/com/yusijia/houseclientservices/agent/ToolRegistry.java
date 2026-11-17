@@ -3,6 +3,7 @@ package com.yusijia.houseclientservices.agent;
 import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
 import com.yusijia.houseclientservices.tool.SubscriptionTools;
+import com.yusijia.houseclientservices.tool.WebSearchTools;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
@@ -20,7 +21,7 @@ import java.util.Set;
 /**
  * 工具目录：按技能提供工具子集。
  * <p>
- * 业务工具只有 8 个，按技能裁剪是为了控制注意力；MCP 的 14 个工具里大部分永远用不到，
+ * 业务工具只有 9 个（含联网检索），按技能裁剪是为了控制注意力；MCP 的 14 个工具里大部分永远用不到，
  * 白名单直接由 SKILL.md 的 tools 推导，在注册期裁掉未声明的部分。
  * 按技能裁剪后，单次请求只挂 2~4 个工具，避免 schema 烧 token、分散模型注意力。
  */
@@ -33,6 +34,7 @@ public class ToolRegistry {
 
     public ToolRegistry(SubscriptionTools subscriptionTools,
                         ProjectTools projectTools,
+                        WebSearchTools webSearchTools,
                         ToolCallbackProvider[] mcpToolProviders,
                         SkillCatalog skillCatalog) {
         // MCP 白名单由技能声明推导：SKILL.md 的 tools 里写了哪些，就注册哪些。
@@ -43,7 +45,7 @@ public class ToolRegistry {
         Set<String> dropped = new LinkedHashSet<>();
         // 本地 @Tool 方法
         ToolCallback[] businessCallbacks = MethodToolCallbackProvider.builder()
-                .toolObjects(subscriptionTools, projectTools)
+                .toolObjects(subscriptionTools, projectTools, webSearchTools)
                 .build()
                 .getToolCallbacks();
         for (ToolCallback callback : businessCallbacks) {

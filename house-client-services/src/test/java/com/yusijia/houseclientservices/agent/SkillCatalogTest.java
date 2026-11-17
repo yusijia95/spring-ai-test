@@ -21,7 +21,7 @@ class SkillCatalogTest {
     @Test
     void loadsEverySkillDirectory() {
         assertEquals(
-                List.of("cancel", "projects", "route", "subscribe", "surroundings"),
+                List.of("cancel", "projects", "route", "subscribe", "surroundings", "web-search"),
                 catalog.all().stream().map(Skill::name).toList());
     }
 
@@ -48,7 +48,7 @@ class SkillCatalogTest {
     @Test
     void indexIsOneLinePerSkill() {
         String index = catalog.index();
-        assertEquals(5, index.split("\n").length);
+        assertEquals(6, index.split("\n").length);
         assertTrue(index.contains("- surroundings: "));
     }
 }
