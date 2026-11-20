@@ -1,5 +1,6 @@
 package com.yusijia.houseclientservices.security;
 
+import com.yusijia.houseclientservices.service.AuthService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

@@ -1,7 +1,7 @@
 package com.yusijia.houseclientservices.config;
 
 import com.yusijia.houseclientservices.agent.memory.redis.RedisOperations;
-import com.yusijia.houseclientservices.security.RedisSessionStore;
+import com.yusijia.houseclientservices.security.redis.RedisSessionStore;
 import com.yusijia.houseclientservices.security.SessionStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

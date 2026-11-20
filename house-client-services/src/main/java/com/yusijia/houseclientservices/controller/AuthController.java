@@ -6,7 +6,7 @@ import com.yusijia.houseclientservices.domain.entity.Conversation;
 import com.yusijia.houseclientservices.security.AccessDeniedException;
 import com.yusijia.houseclientservices.security.Authorization;
 import com.yusijia.houseclientservices.security.PermissionPoints;
-import com.yusijia.houseclientservices.security.AuthService;
+import com.yusijia.houseclientservices.service.AuthService;
 import com.yusijia.houseclientservices.security.UserContext;
 import com.yusijia.houseclientservices.service.ConversationService;
 import jakarta.servlet.http.HttpServletRequest;

@@ -1,14 +1,17 @@
-package com.yusijia.houseclientservices.security;
+package com.yusijia.houseclientservices.security.redis;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yusijia.houseclientservices.agent.memory.redis.RedisOperations;
+import com.yusijia.houseclientservices.security.SessionStore;
+import com.yusijia.houseclientservices.security.UserContext;
 
 /**
  * Redis 实现：token 作为 key，value 是 {@link UserContext} 的 JSON，带 TTL。
  * <p>
  * 复用记忆层的 {@link RedisOperations}（不直接依赖 Jedis），
  * 这样测试可以塞一个内存实现，不需要真的起 Redis。
+ * 接口在 {@code security/}，实现放 {@code security/redis/} 子包（与 agent.memory 的 redis/ 对齐）。
  */
 public class RedisSessionStore implements SessionStore {
 

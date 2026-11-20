@@ -1,11 +1,13 @@
-package com.yusijia.houseclientservices.security;
+package com.yusijia.houseclientservices.service;
 
+import com.yusijia.houseclientservices.security.DemoAccounts;
+import com.yusijia.houseclientservices.security.SessionStore;
+import com.yusijia.houseclientservices.security.UserContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
 
@@ -15,6 +17,8 @@ import java.util.Base64;
  * 只校验用户名是否在 {@link DemoAccounts} 白名单里，命中即签发不透明令牌。
  * 令牌是 256-bit 随机串（Base64URL），服务端存 token -> {@link UserContext}，
  * 客户端只持有 token，不持有角色（角色以服务端存储为准，防止前端伪造角色提权）。
+ * <p>
+ * 按项目规范放 {@code service/} 包（业务服务），安全机制（Filter/判定/值对象）留在 {@code security/}。
  */
 @Service
 public class AuthService {
