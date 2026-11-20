@@ -13,6 +13,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -122,15 +125,52 @@ public class SubscriptionTools {
                 .collect(Collectors.joining("\n"));
     }
 
-    @Tool(description = "生成认购业务。必须使用 searchHouse 返回的房屋ID，以及 searchPerson 或 searchOrg 返回的购买主体ID；严禁使用任何未经查询得到的ID。信息不全时禁止调用。")
+    @Tool(description = "生成认购业务。必须使用 searchHouse 返回的房屋ID，以及 searchPerson 或 searchOrg 返回的购买主体ID；严禁使用任何未经查询得到的ID。信息不全时禁止调用。confirmed 为 false 时只预览不创建，客户确认后再以 confirmed=true 调用。")
     public String createSubscription(
             @ToolParam(description = "房屋ID，多个用英文逗号分隔，必须来自 searchHouse 结果") String houseIds,
             @ToolParam(description = "个人客户ID，多个用英文逗号分隔，必须来自 searchPerson 结果；企业购房时传空字符串", required = false) String personIds,
-            @ToolParam(description = "单位客户ID，多个用英文逗号分隔，必须来自 searchOrg 结果；个人购房时传空字符串", required = false) String orgIds) {
+            @ToolParam(description = "单位客户ID，多个用英文逗号分隔，必须来自 searchOrg 结果；个人购房时传空字符串", required = false) String orgIds,
+            @ToolParam(description = "客户是否已确认认购，必须为 true 才执行创建") boolean confirmed) {
+        if (!confirmed) {
+            // 预览模式：只查询房屋和购买方信息，不创建
+            try {
+                List<Long> rooms = parseIds(houseIds);
+                List<Long> persons = parseIds(personIds);
+                List<Long> orgs = parseIds(orgIds);
+                if (rooms.isEmpty()) {
+                    return "预览失败：请至少选择一套房屋。";
+                }
+                if (persons.isEmpty() && orgs.isEmpty()) {
+                    return "预览失败：请至少选择一个购买主体。";
+                }
+                // 查询房屋坐落和购买方姓名用于预览
+                List<HouseView> houses = masterDataService.searchHousesByIds(rooms);
+                List<PersonView> people = persons.isEmpty() ? List.of() : masterDataService.searchPersonsByIds(persons);
+                List<OrgView> units = orgs.isEmpty() ? List.of() : masterDataService.searchOrgsByIds(orgs);
+                StringBuilder preview = new StringBuilder("【认购预览】请确认以下信息：\n");
+                for (HouseView h : houses) {
+                    preview.append("房屋：").append(h.fullAddress())
+                            .append("（").append(plain(h.buildingArea())).append("㎡，")
+                            .append(plain(h.referenceUnitPrice())).append("元/㎡）\n");
+                }
+                for (PersonView p : people) {
+                    preview.append("购买方：").append(p.fullName())
+                            .append("（证件号 ").append(p.idNoMasked()).append("）\n");
+                }
+                for (OrgView u : units) {
+                    preview.append("购买方：").append(u.fullName()).append("\n");
+                }
+                preview.append("请向客户确认以上信息无误后，以 confirmed=true 重新调用本工具完成创建。");
+                return preview.toString();
+            } catch (Exception e) {
+                return "预览失败：" + e.getMessage();
+            }
+        }
         createSubscriptionCalled.set(true);
+        String token = computeIdempotencyKey(houseIds, personIds, orgIds);
         try {
             SubscriptionView view = subscriptionService.create(
-                    parseIds(houseIds), parseIds(personIds), parseIds(orgIds));
+                    parseIds(houseIds), parseIds(personIds), parseIds(orgIds), token);
             return "认购业务已生成。编号=" + view.bizNo()
                     + "，房屋坐落=" + String.join("、", view.houseLocations())
                     + "，购买方=" + String.join("、", view.buyerNames())
@@ -139,6 +179,32 @@ public class SubscriptionTools {
         } catch (BizException e) {
             return "生成失败：" + e.getMessage();
         }
+    }
+
+    /**
+     * 根据入参计算幂等键：SHA-256(houseIds|personIds|orgIds)。
+     * 同一会话内相同参数的多次调用命中同一个 token，防止重复创建。
+     */
+    private String computeIdempotencyKey(String houseIds, String personIds, String orgIds) {
+        try {
+            String raw = normalizeIds(houseIds) + "|" + normalizeIds(personIds) + "|" + normalizeIds(orgIds);
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 是 JDK 标准算法，不会缺失
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
+    }
+
+    /** 排序并去重，保证同一组 ID 不同顺序得到相同哈希 */
+    private String normalizeIds(String raw) {
+        List<Long> ids = parseIds(raw);
+        return ids.stream().sorted().map(String::valueOf).collect(Collectors.joining(","));
     }
 
     @Tool(description = "查询认购业务，仅用于撤销前核对。必须提供房屋坐落或购买方姓名至少一项。只返回编号、房屋坐落、购房人和状态，不执行撤销。")

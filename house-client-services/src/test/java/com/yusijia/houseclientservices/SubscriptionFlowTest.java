@@ -43,7 +43,7 @@ class SubscriptionFlowTest {
 
     @Test
     void createShouldOccupyHouseAndWriteSnapshots() {
-        SubscriptionView view = subscriptionService.create(List.of(4001L), List.of(5001L), null);
+        SubscriptionView view = subscriptionService.create(List.of(4001L), List.of(5001L), null, null);
 
         assertThat(view.id()).isNotBlank();
         assertThat(view.bizNo()).startsWith("RZ");
@@ -84,16 +84,16 @@ class SubscriptionFlowTest {
 
     @Test
     void createShouldRejectAlreadyOccupiedHouse() {
-        subscriptionService.create(List.of(4001L), List.of(5001L), null);
+        subscriptionService.create(List.of(4001L), List.of(5001L), null, null);
 
-        assertThatThrownBy(() -> subscriptionService.create(List.of(4001L), List.of(5002L), null))
+        assertThatThrownBy(() -> subscriptionService.create(List.of(4001L), List.of(5002L), null, null))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("已被认购");
     }
 
     @Test
     void cancelShouldReleaseHouseAndRevokeSnapshot() {
-        SubscriptionView view = subscriptionService.create(List.of(4002L), List.of(5002L), null);
+        SubscriptionView view = subscriptionService.create(List.of(4002L), List.of(5002L), null, null);
 
         SubscriptionView cancelledView = subscriptionService.cancel(view.bizNo(), true);
         assertThat(cancelledView.status()).isEqualTo(3);
@@ -127,7 +127,7 @@ class SubscriptionFlowTest {
 
     @Test
     void searchShouldMatchBuyerSnapshot() {
-        subscriptionService.create(List.of(4003L), List.of(5003L), null);
+        subscriptionService.create(List.of(4003L), List.of(5003L), null, null);
 
         List<SubscriptionView> found = subscriptionService.find(null, "王五");
         assertThat(found).hasSize(1);

@@ -257,6 +257,97 @@ public class MasterDataService {
                 .toList();
     }
 
+    /**
+     * 按 ID 列表批量查询房屋（供认购预览用）。
+     */
+    public List<HouseView> searchHousesByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        List<HouseRoom> rooms = houseRoomMapper.selectBatchIds(ids);
+        if (rooms.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> buildingIds = rooms.stream()
+                .map(HouseRoom::getBuildingId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, HouseBuilding> buildings = loadByIds(buildingIds,
+                batchIds -> houseBuildingMapper.selectBatchIds(batchIds), HouseBuilding::getId);
+        Set<Long> projectIds = buildings.values().stream()
+                .map(HouseBuilding::getProjectId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, HouseProject> projects = loadByIds(projectIds,
+                batchIds -> houseProjectMapper.selectBatchIds(batchIds), HouseProject::getId);
+        List<HouseView> views = new ArrayList<>(rooms.size());
+        for (HouseRoom room : rooms) {
+            HouseBuilding building = buildings.get(room.getBuildingId());
+            HouseProject project = building == null ? null : projects.get(building.getProjectId());
+            views.add(new HouseView(
+                    String.valueOf(room.getId()),
+                    project == null ? null : project.getProjectName(),
+                    building == null ? null : building.getBuildingNo(),
+                    room.getRoomNo(),
+                    room.getFullAddress(),
+                    room.getBuildingArea(),
+                    room.getReferenceUnitPrice(),
+                    room.getPlannedUsage(),
+                    room.getActiveSubscriptionId() == null));
+        }
+        return views;
+    }
+
+    /**
+     * 按 ID 列表批量查询个人客户（供认购预览用）。
+     */
+    public List<PersonView> searchPersonsByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        List<Person> persons = personMapper.selectBatchIds(ids);
+        if (persons.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> personIds = persons.stream().map(Person::getId).collect(Collectors.toSet());
+        List<PersonContact> contacts = personContactMapper.selectList(new LambdaQueryWrapper<PersonContact>()
+                .eq(PersonContact::getDeletedFlag, NOT_DELETED)
+                .in(PersonContact::getPersonId, personIds)
+                .orderByAsc(PersonContact::getId));
+        Map<Long, String> phoneByPerson = new HashMap<>();
+        for (PersonContact contact : contacts) {
+            phoneByPerson.putIfAbsent(contact.getPersonId(), contact.getContactValue());
+        }
+        List<PersonView> views = new ArrayList<>(persons.size());
+        for (Person person : persons) {
+            views.add(new PersonView(
+                    String.valueOf(person.getId()),
+                    person.getFullName(),
+                    maskIdNo(person.getIdNo()),
+                    phoneByPerson.get(person.getId())));
+        }
+        return views;
+    }
+
+    /**
+     * 按 ID 列表批量查询单位（供认购预览用）。
+     */
+    public List<OrgView> searchOrgsByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        List<OrgUnit> units = orgUnitMapper.selectBatchIds(ids);
+        return units.stream()
+                .map(unit -> new OrgView(
+                        String.valueOf(unit.getId()),
+                        unit.getUnitType(),
+                        unitTypeText(unit.getUnitType()),
+                        unit.getFullName(),
+                        unit.getIdNo(),
+                        unit.getContact()))
+                .toList();
+    }
+
     private String unitTypeText(Integer unitType) {
         if (unitType == null) {
             return "未知";

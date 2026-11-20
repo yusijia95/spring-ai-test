@@ -96,7 +96,7 @@ public class SubscriptionService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public SubscriptionView create(List<Long> houseIds, List<Long> personIds, List<Long> orgIds) {
+    public SubscriptionView create(List<Long> houseIds, List<Long> personIds, List<Long> orgIds, String clientToken) {
         List<Long> roomIds = distinct(houseIds);
         List<Long> buyerIds = distinct(personIds);
         List<Long> unitIds = distinct(orgIds);
@@ -105,6 +105,17 @@ public class SubscriptionService {
         }
         if (buyerIds.isEmpty() && unitIds.isEmpty()) {
             throw new BizException("请至少选择一个购买主体。");
+        }
+
+        // 幂等：同一 clientToken 已有有效认购则直接返回，不重复创建
+        if (StringUtils.hasText(clientToken)) {
+            Subscription existing = subscriptionMapper.selectOne(new LambdaQueryWrapper<Subscription>()
+                    .eq(Subscription::getClientToken, clientToken)
+                    .eq(Subscription::getStatus, STATUS_ACTIVE)
+                    .last("LIMIT 1"));
+            if (existing != null) {
+                return toViews(List.of(existing)).get(0);
+            }
         }
 
         List<HouseRoom> rooms = houseRoomMapper.selectBatchIds(roomIds);
@@ -146,6 +157,7 @@ public class SubscriptionService {
         Subscription subscription = new Subscription();
         subscription.setId(subscriptionId);
         subscription.setBizNo("RZ" + subscriptionId);
+        subscription.setClientToken(clientToken);
         subscription.setStatus(STATUS_ACTIVE);
         subscription.setBizType(1);
         subscription.setTotalPrice(totalPrice);

@@ -26,6 +26,12 @@ public class Subscription {
     private String bizNo;
 
     /**
+     * 幂等键（SHA-256 hex，同一参数多次调用命中同一 token）
+     */
+    @TableField("client_token")
+    private String clientToken;
+
+    /**
      * 状态：0草稿 1有效 2完成 3撤销
      */
     @TableField("status")
@@ -108,6 +114,14 @@ public class Subscription {
 
     public void setBizNo(String bizNo) {
         this.bizNo = bizNo;
+    }
+
+    public String getClientToken() {
+        return clientToken;
+    }
+
+    public void setClientToken(String clientToken) {
+        this.clientToken = clientToken;
     }
 
     public Integer getStatus() {
