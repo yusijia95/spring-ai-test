@@ -1,6 +1,7 @@
 package com.yusijia.houseclientservices.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.yusijia.houseclientservices.agent.PiiMasker;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -186,7 +187,7 @@ public class WebSearchTools {
         try {
             results = WebSearchFormat.parseSearch(search(trimmed));
         } catch (Exception e) {
-            log.warn("联网检索失败: query={}, error={}", trimmed, e.getMessage());
+            log.warn("联网检索失败: query={}, error={}", PiiMasker.mask(trimmed), e.getMessage());
             return "联网检索失败（" + shortMessage(e) + "）。请如实告知客户暂时查不到，不要凭记忆作答。";
         }
         if (results.isEmpty()) {
@@ -197,7 +198,7 @@ public class WebSearchTools {
         List<WebSearchFormat.WebResult> ranked = WebSearchFormat.applyOrder(results, hits, rerankMinScore);
         String text = WebSearchFormat.format(ranked, topN);
         log.info("联网检索: query={}, 候选={}, 重排={}, 输出={}条",
-                trimmed, results.size(), hits == null ? "未启用" : "已启用",
+                PiiMasker.mask(trimmed), results.size(), hits == null ? "未启用" : "已启用",
                 Math.min(topN, ranked.size()));
         return text;
     }

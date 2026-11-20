@@ -29,7 +29,8 @@ class SkillCatalogTest {
     void parsesFrontmatterAndBody() {
         Skill subscribe = catalog.byNames(List.of("subscribe")).get(0);
 
-        assertEquals(List.of("searchHouse", "searchPerson", "searchOrg", "createSubscription"),
+        assertEquals(List.of("searchHouse", "searchPerson", "searchOrg", "createSubscription",
+                        "rememberSessionFact"),
                 subscribe.tools());
         assertTrue(subscribe.description().startsWith("客户要办理认购"));
         assertTrue(subscribe.body().startsWith("## 生成认购"));

@@ -1,7 +1,7 @@
 ---
 name: projects
 description: 客户询问某区域有哪些楼盘、住宅、小区，或房价、均价、单价、在售房源、户型、建筑面积时使用。
-tools: searchProjects, searchHouse
+tools: searchProjects, searchHouse, rememberSessionFact
 ---
 ## 楼盘与房价查询
 - 客户询问某区域有哪些楼盘、住宅、小区，或房价、均价、单价、在售房源、户型、面积时，
@@ -14,3 +14,8 @@ tools: searchProjects, searchHouse
   "该区域暂无在售项目数据"，并说明当前可查范围；禁止直接跳过这个话题。
 - 禁止编造楼盘或价格，禁止用地图工具搜到的地名、超市名冒充楼盘。
 - 客户需要具体房号、具体某一套时，再调用 searchHouse。
+
+## 会话状态
+- 客户开始关注某个楼盘后，调用 rememberSessionFact 记录 currentProject（楼盘名）。
+- 客户明确说出预算或意向区域时，记录 budget / districtPref。
+- 只记录客户说过的内容，不要从价格区间反推预算。

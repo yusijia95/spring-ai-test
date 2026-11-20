@@ -2,9 +2,9 @@ package com.yusijia.houseclientservices.config;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.yusijia.houseclientservices.agent.MaskingLoggingAdvisor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,9 +25,17 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AiConfig {
 
+    /**
+     * 智能体主 ChatClient。
+     * <p>
+     * advisor 顺序：记忆在前、日志在后。日志 advisor 默认只打一行摘要（不含消息正文），
+     * 避免证件号、手机号等 PII 随 prompt 明文落盘；排查时把
+     * {@code agent.log.prompt.enabled} 置 true 才会输出脱敏后的正文。
+     */
     @Bean
     public ChatClient houseServiceChatClient(DashScopeChatModel dashScopeChatModel,
-                                              ChatMemory chatMemory) {
+                                              ChatMemory chatMemory,
+                                              @Value("${agent.log.prompt.enabled:false}") boolean promptLogEnabled) {
         DashScopeChatOptions options = DashScopeChatOptions.builder()
                 .model("qwen-max")
                 .temperature(0.0d)
@@ -35,7 +43,8 @@ public class AiConfig {
                 // 全局强制调用工具会破坏该行为。防幻觉由下游 AgentController 的责任链兜底。
                 .build();
         return ChatClient.builder(dashScopeChatModel)
-                .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build(), new SimpleLoggerAdvisor())
+                .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
+                        new MaskingLoggingAdvisor(promptLogEnabled))
                 .defaultOptions(options)
                 .build();
     }

@@ -1,7 +1,7 @@
 ---
 name: subscribe
 description: 客户要办理认购、签约、网签、定购、交纳定金，或说"我要买某套房"时使用。负责收集房屋坐落、购买方姓名与证件号码，并生成认购单。
-tools: searchHouse, searchPerson, searchOrg, createSubscription
+tools: searchHouse, searchPerson, searchOrg, createSubscription, rememberSessionFact
 ---
 ## 生成认购
 1. 从客户描述中提取：房屋坐落、购买方姓名、购买方证件号码。
@@ -19,3 +19,8 @@ tools: searchHouse, searchPerson, searchOrg, createSubscription
    houseIds 与 personIds（或 orgIds）传工具返回的真实 ID，多个 ID 用英文逗号分隔。
    生成认购不需要客户二次确认，信息齐全就直接生成。
 6. 工具返回后，原样转述给客户，不得修改编号、金额或任何内容。
+
+## 会话状态
+- 房屋定位成功、或认购单生成成功后，调用 rememberSessionFact 记录 currentProject / currentHouse / pendingSubscription。
+- 记录值必须来自工具返回结果（房屋ID、认购单号原样复制），禁止填写推测内容。
+- 客户明确说出预算或意向区域时，记录 budget / districtPref。

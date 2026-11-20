@@ -1,7 +1,9 @@
 package com.yusijia.houseclientservices.agent;
 
 import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
+import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
+import com.yusijia.houseclientservices.tool.SessionStateTools;
 import com.yusijia.houseclientservices.tool.SubscriptionTools;
 import com.yusijia.houseclientservices.tool.WebSearchTools;
 import org.slf4j.Logger;
@@ -32,9 +34,13 @@ public class ToolRegistry {
 
     private final Map<String, ToolCallback> byName = new LinkedHashMap<>();
 
+    /** 会改变业务数据的工具：读过外部不可信内容后本轮直接熔断 */
+    private static final Set<String> WRITE_TOOLS = Set.of("createSubscription", "cancelSubscription");
+
     public ToolRegistry(SubscriptionTools subscriptionTools,
                         ProjectTools projectTools,
                         WebSearchTools webSearchTools,
+                        SessionStateTools sessionStateTools,
                         ToolCallbackProvider[] mcpToolProviders,
                         SkillCatalog skillCatalog) {
         // MCP 白名单由技能声明推导：SKILL.md 的 tools 里写了哪些，就注册哪些。
@@ -45,11 +51,13 @@ public class ToolRegistry {
         Set<String> dropped = new LinkedHashSet<>();
         // 本地 @Tool 方法
         ToolCallback[] businessCallbacks = MethodToolCallbackProvider.builder()
-                .toolObjects(subscriptionTools, projectTools, webSearchTools)
+                .toolObjects(subscriptionTools, projectTools, webSearchTools, sessionStateTools)
                 .build()
                 .getToolCallbacks();
         for (ToolCallback callback : businessCallbacks) {
-            byName.put(callback.getToolDefinition().name(), callback);
+            String name = callback.getToolDefinition().name();
+            // 写工具统一套"外部内容熔断"：读过网页正文后，本轮不允许落库操作
+            byName.put(name, WRITE_TOOLS.contains(name) ? guardWriteTool(callback) : callback);
         }
 
         // 百度地图 MCP 工具：统一包装，剥掉 MCP content 数组、格式化输出、记住地理编码坐标
@@ -86,14 +94,17 @@ public class ToolRegistry {
     /**
      * 按技能集合取工具。按 skills 顺序取各自 tools() 并集（LinkedHashSet 去重），
      * 按名字从 byName 取；某个名字查不到则 log.warn 跳过。
-     * 最终结果为空时退回全量（安全兜底）。
+     * <p>
+     * <b>空技能列表 = 空工具列表</b>：调用方只有在"模型明确判定本轮无技能"
+     * （纯寒暄/道谢）时才会传空，这时下发任何业务工具都是浪费 schema token，
+     * 还会让模型在寒暄轮里尝试调工具。选择器自身异常时返回的是全量技能，不是空列表。
      *
      * @param skills 选中的技能列表
-     * @return 工具回调列表
+     * @return 工具回调列表，可能为空
      */
     public List<ToolCallback> forSkills(List<Skill> skills) {
         if (skills == null || skills.isEmpty()) {
-            return List.copyOf(byName.values());
+            return List.of();
         }
         Set<String> names = new LinkedHashSet<>();
         for (Skill skill : skills) {
@@ -108,12 +119,36 @@ public class ToolRegistry {
                 log.warn("工具未注册: {}（可能该工具已被静态裁剪）", name);
             }
         }
-        return selected.isEmpty() ? List.copyOf(byName.values()) : selected;
+        return selected;
     }
 
     /** 全部已注册工具名，便于排查 */
     public Set<String> registeredToolNames() {
         return Set.copyOf(byName.keySet());
+    }
+
+    /**
+     * 给写工具套一层熔断：本轮读过外部资料时把拒绝文案当作工具返回值，
+     * 不抛异常——异常会让客户拿到一个报错，而拒绝文案还能被模型转述成"请您再确认"。
+     * <p>
+     * 放行判断在每次调用时做，所以同一份注册表可以跨轮复用。
+     */
+    static ToolCallback guardWriteTool(ToolCallback callback) {
+        return new ToolCallback() {
+            @Override
+            public org.springframework.ai.tool.definition.ToolDefinition getToolDefinition() {
+                return callback.getToolDefinition();
+            }
+
+            @Override
+            public String call(String toolInput) {
+                String refusal = ExternalContentGuard.blockIfSeen(callback.getToolDefinition().name());
+                if (refusal != null) {
+                    return refusal;
+                }
+                return callback.call(toolInput);
+            }
+        };
     }
 
     private ToolCallback wrap(ToolCallback callback) {

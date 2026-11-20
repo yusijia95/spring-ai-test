@@ -90,7 +90,7 @@ public class RetrievalPlanner {
                     .call()
                     .content();
             queries = parseQueries(raw, maxQueries);
-            log.debug("检索规划: question={}, queries={}", question, queries);
+            log.debug("检索规划: question={}, queries={}", PiiMasker.mask(question), queries);
         } catch (Exception e) {
             log.warn("检索规划失败，降级为单次检索: {}", e.getMessage());
         }

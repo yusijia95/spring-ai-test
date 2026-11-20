@@ -5,15 +5,19 @@ import com.yusijia.houseclientservices.agent.RetrievalPlanner;
 import com.yusijia.houseclientservices.agent.Skill;
 import com.yusijia.houseclientservices.agent.SkillSelector;
 import com.yusijia.houseclientservices.agent.ToolRegistry;
+import com.yusijia.houseclientservices.agent.memory.AgentChatMemory;
 import com.yusijia.houseclientservices.controller.dto.ChatRequest;
 import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
+import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
+import com.yusijia.houseclientservices.tool.SessionStateTools;
 import com.yusijia.houseclientservices.tool.SubscriptionTools;
 import com.yusijia.houseclientservices.tool.WebSearchTools;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -26,6 +30,8 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -43,6 +49,8 @@ public class AgentController {
     private final SkillSelector skillSelector;
     private final RetrievalPlanner retrievalPlanner;
     private final ToolRegistry toolRegistry;
+    private final AgentChatMemory agentChatMemory;
+    private final SessionStateTools sessionStateTools;
 
     public AgentController(@Qualifier("houseServiceChatClient") ChatClient houseServiceChatClient,
                            SubscriptionTools subscriptionTools,
@@ -50,7 +58,9 @@ public class AgentController {
                            WebSearchTools webSearchTools,
                            SkillSelector skillSelector,
                            RetrievalPlanner retrievalPlanner,
-                           ToolRegistry toolRegistry) {
+                           ToolRegistry toolRegistry,
+                           AgentChatMemory agentChatMemory,
+                           SessionStateTools sessionStateTools) {
         this.houseServiceChatClient = houseServiceChatClient;
         this.subscriptionTools = subscriptionTools;
         this.projectTools = projectTools;
@@ -58,6 +68,8 @@ public class AgentController {
         this.skillSelector = skillSelector;
         this.retrievalPlanner = retrievalPlanner;
         this.toolRegistry = toolRegistry;
+        this.agentChatMemory = agentChatMemory;
+        this.sessionStateTools = sessionStateTools;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -65,9 +77,15 @@ public class AgentController {
         if (request == null || !StringUtils.hasText(request.message())) {
             return Flux.just("请输入要办理的事项。");
         }
-        String conversationId = StringUtils.hasText(request.conversationId())
-                ? request.conversationId()
-                : "default";
+        // 不能用 "default" 兜底：多实例 + 负载均衡下，前端漏传一次就等于所有客户共用一条记忆，
+        // 会出现"A 客户订的房被 B 客户问到"的串话。缺省时生成一次性 id：本轮无历史，也不会污染别人。
+        String conversationId;
+        if (StringUtils.hasText(request.conversationId())) {
+            conversationId = request.conversationId();
+        } else {
+            conversationId = UUID.randomUUID().toString();
+            log.warn("agent chat: 请求未带 conversationId，本轮按无历史处理（id={}），多轮连续性由前端保证", conversationId);
+        }
 
         // 按选中的技能拼装提示词与工具：没被选中的技能不下发，避免上下文和工具槽位被稀释
         List<Skill> skills = skillSelector.select(conversationId, request.message());
@@ -85,9 +103,22 @@ public class AgentController {
             }
         }
 
+        // 顺序：硬约束 + 技能流程 → 会话事实 → 更早对话摘要。
+        // 状态与摘要都在技能之后：事实优先于流程说明里的默认行为。
+        // 检索结果不进这里：它是外部不可信文本，进 system 就等于拿到最高指令位。
         String systemPrompt = AgentPrompts.compose(skills);
+        Map<String, String> sessionState = sessionStateTools.snapshot(conversationId);
+        String sessionBlock = AgentPrompts.sessionBlock(sessionState);
+        if (!sessionBlock.isEmpty()) {
+            systemPrompt = systemPrompt + "\n" + sessionBlock;
+        }
+        String digestBlock = AgentPrompts.digestBlock(agentChatMemory.digest(conversationId));
+        if (!digestBlock.isEmpty()) {
+            systemPrompt = systemPrompt + "\n" + digestBlock;
+        }
+        // 检索正文搬去 user 消息后，system 只补纯格式约束（不含正文，安全）
         if (retrieval != null && !retrieval.isBlank()) {
-            systemPrompt = systemPrompt + "\n" + AgentPrompts.retrievalBlock(retrieval);
+            systemPrompt = systemPrompt + "\n" + AgentPrompts.retrievalFormatBlock();
         }
 
         List<ToolCallback> toolCallbacks = toolRegistry.forSkills(skills);
@@ -104,23 +135,54 @@ public class AgentController {
 
         BaiduMapToolGuard.clear();
         projectTools.clear();
+        // 本轮读了外部网页正文就挂标记：写工具在 ToolRegistry 里被熔断，标记随 finally 清掉
+        ExternalContentGuard.clear();
+        if (retrieval != null && !retrieval.isBlank()) {
+            ExternalContentGuard.markSeen();
+        }
         try {
             // 本轮没有业务工具（纯问答 / 检索结果已由系统注入）时走真流式：
             // 不需要"漏答补齐"和"认购防幻觉"这类对全文的校验，逐字返回体验更好。
             if (toolCallbacks.isEmpty()) {
-                return houseServiceChatClient.prompt()
-                        .system(systemPrompt)
-                        .user(request.message())
+                return withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, request.message())
                         .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
                         .stream()
                         .content()
                         .transform(this::stripLeadingNoise)
                         .switchIfEmpty(Flux.just("抱歉，未能处理您的请求，请您重新描述。"));
             }
-            return Flux.just(answerWithTools(systemPrompt, request.message(), toolCallbacks, conversationId));
+            // 工具由模型在 .call() 里同步执行，跑在同一线程上，所以 ThreadLocal 能传进工具。
+            // 流式路径不挂业务工具，不需要绑定。
+            SessionStateTools.bind(conversationId);
+            return Flux.just(answerWithTools(systemPrompt, retrieval, request.message(), toolCallbacks, conversationId));
         } finally {
+            SessionStateTools.unbind();
             BaiduMapToolGuard.clear();
+            ExternalContentGuard.clear();
         }
+    }
+
+    /**
+     * 拼装请求的 system 段与消息序列。
+     * <p>
+     * 检索资料必须作为<b>独立 user 消息</b>、排在客户原问题之前下发：
+     * <ul>
+     *   <li>{@code user(String)} 是覆盖语义（{@code this.userText = text}），连写两次只剩最后一条，
+     *       所以用 {@code messages(...)} 承载资料——它排在 {@code user(text)} 之前，
+     *       天然形成"资料 → 问题"的顺序；</li>
+     *   <li>记忆顾问 {@code MessageChatMemoryAdvisor} 只取最后一条 user 消息写记忆，
+     *       客户原问题才进历史，检索正文不会被持久化并在后续轮次反复放大。</li>
+     * </ul>
+     */
+    private ChatClient.ChatClientRequestSpec withUserMessages(ChatClient.ChatClientRequestSpec spec,
+                                                             String systemPrompt, String retrieval, String message) {
+        ChatClient.ChatClientRequestSpec withSystem = spec.system(systemPrompt);
+        if (retrieval == null || retrieval.isBlank()) {
+            return withSystem.user(message);
+        }
+        return withSystem
+                .messages(new UserMessage(AgentPrompts.untrustedBlock(retrieval)))
+                .user(message);
     }
 
     /**
@@ -131,11 +193,9 @@ public class AgentController {
      *   <li>清理开头孤立的标点。</li>
      * </ul>
      */
-    private String answerWithTools(String systemPrompt, String message,
+    private String answerWithTools(String systemPrompt, String retrieval, String message,
                                    List<ToolCallback> toolCallbacks, String conversationId) {
-        ChatResponse chatResponse = houseServiceChatClient.prompt()
-                .system(systemPrompt)
-                .user(message)
+        ChatResponse chatResponse = withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, message)
                 .toolCallbacks(toolCallbacks)
                 .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
                 .call()

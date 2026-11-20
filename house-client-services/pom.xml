@@ -62,15 +62,19 @@
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
             <version>3.5.12</version>
         </dependency>
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-starter-memory-redis</artifactId>
-            <version>1.1.2.3</version>
-        </dependency>
+        <!-- 记忆自研：不用 spring-ai-alibaba-starter-memory-redis。
+             它没有 AutoConfiguration.imports，实际从未参与装配；只保留 jedis 客户端即可。 -->
         <dependency>
             <groupId>redis.clients</groupId>
             <artifactId>jedis</artifactId>
             <version>${jedis.version}</version>
+        </dependency>
+
+        <!-- 情节记忆（对话摘要）落在 PostgreSQL；业务库仍是 MySQL，两套数据源互不影响 -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <dependency>
