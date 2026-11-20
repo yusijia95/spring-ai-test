@@ -74,6 +74,7 @@ public class AgentController {
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> chat(@RequestBody ChatRequest request) {
+        long startTime = System.currentTimeMillis();
         if (request == null || !StringUtils.hasText(request.message())) {
             return Flux.just("请输入要办理的事项。");
         }
@@ -140,26 +141,70 @@ public class AgentController {
         if (retrieval != null && !retrieval.isBlank()) {
             ExternalContentGuard.markSeen();
         }
+        List<String> toolNames = toolCallbacks.stream()
+                .map(cb -> cb.getToolDefinition().name()).toList();
+        boolean hasRetrieval = retrieval != null && !retrieval.isBlank();
+
         try {
             // 本轮没有业务工具（纯问答 / 检索结果已由系统注入）时走真流式：
             // 不需要"漏答补齐"和"认购防幻觉"这类对全文的校验，逐字返回体验更好。
             if (toolCallbacks.isEmpty()) {
-                return withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, request.message())
+                Flux<String> flux = withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, request.message())
                         .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
                         .stream()
                         .content()
                         .transform(this::stripLeadingNoise)
                         .switchIfEmpty(Flux.just("抱歉，未能处理您的请求，请您重新描述。"));
+                return attachSummary(flux, conversationId, skills, toolNames, hasRetrieval, startTime);
             }
             // 工具由模型在 .call() 里同步执行，跑在同一线程上，所以 ThreadLocal 能传进工具。
             // 流式路径不挂业务工具，不需要绑定。
             SessionStateTools.bind(conversationId);
-            return Flux.just(answerWithTools(systemPrompt, retrieval, request.message(), toolCallbacks, conversationId));
+            String answer = answerWithTools(systemPrompt, retrieval, request.message(), toolCallbacks, conversationId);
+            logSummary(conversationId, skills, toolNames, hasRetrieval, answer, startTime);
+            return Flux.just(answer);
         } finally {
             SessionStateTools.unbind();
             BaiduMapToolGuard.clear();
             ExternalContentGuard.clear();
         }
+    }
+
+    /**
+     * 给流式 Flux 挂一个 doOnComplete/doOnError，结束时打结构化摘要日志。
+     * 流式路径拿不到完整回复文本，只记 token 数和耗时。
+     */
+    private Flux<String> attachSummary(Flux<String> flux, String conversationId,
+                                       List<Skill> skills, List<String> toolNames,
+                                       boolean hasRetrieval, long startTime) {
+        java.util.concurrent.atomic.AtomicInteger chunkCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger charCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        return flux
+                .doOnNext(chunk -> {
+                    if (chunk != null) {
+                        chunkCount.incrementAndGet();
+                        charCount.addAndGet(chunk.length());
+                    }
+                })
+                .doOnComplete(() -> logSummary(conversationId, skills, toolNames, hasRetrieval,
+                        null, startTime))
+                .doOnError(e -> log.warn("agent chat 流式异常: conversationId={}, error={}", conversationId, e.getMessage()))
+                .doOnComplete(() -> {
+                    // 上面的 doOnComplete 已经打了，这里不重复
+                });
+    }
+
+    /**
+     * 结构化摘要日志：一行汇总本轮关键信息，便于 grep 和监控。
+     * 格式：agent summary | cid=... | skills=... | tools=... | retrieval=Y/N | chunks=N | chars=N | duration=NNNms
+     */
+    private void logSummary(String conversationId, List<Skill> skills, List<String> toolNames,
+                            boolean hasRetrieval, String fullAnswer, long startTime) {
+        long duration = System.currentTimeMillis() - startTime;
+        String skillNames = skills.stream().map(Skill::name).collect(Collectors.joining(","));
+        int chars = fullAnswer != null ? fullAnswer.length() : -1;
+        log.info("agent summary | cid={} | skills=[{}] | tools=[{}] | retrieval={} | answer_chars={} | duration={}ms",
+                conversationId, skillNames, toolNames, hasRetrieval ? "Y" : "N", chars, duration);
     }
 
     /**

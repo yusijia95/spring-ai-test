@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- traceId 由 TraceIdFilter 写入 MDC；非 HTTP 线程（异步/定时）没有时显示 - -->
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %5p ${PID:-} --- [%15.15t] %-40.40logger{39} : [%X{traceId:-}] %m%n"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 默认 INFO；各包可单独调 -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!-- Spring AI 内部日志保持 INFO，避免淹没业务日志 -->
+    <logger name="org.springframework.ai" level="INFO"/>
+    <logger name="org.flywaydb" level="INFO"/>
+</configuration>
