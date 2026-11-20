@@ -7,6 +7,11 @@ import com.yusijia.houseclientservices.agent.SkillSelector;
 import com.yusijia.houseclientservices.agent.ToolRegistry;
 import com.yusijia.houseclientservices.agent.memory.AgentChatMemory;
 import com.yusijia.houseclientservices.controller.dto.ChatRequest;
+import com.yusijia.houseclientservices.security.Authorization;
+import com.yusijia.houseclientservices.security.PermissionPoints;
+import com.yusijia.houseclientservices.security.UserContext;
+import com.yusijia.houseclientservices.service.ConversationService;
+import jakarta.servlet.http.HttpServletRequest;
 import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
 import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
@@ -51,6 +56,7 @@ public class AgentController {
     private final ToolRegistry toolRegistry;
     private final AgentChatMemory agentChatMemory;
     private final SessionStateTools sessionStateTools;
+    private final ConversationService conversationService;
 
     public AgentController(@Qualifier("houseServiceChatClient") ChatClient houseServiceChatClient,
                            SubscriptionTools subscriptionTools,
@@ -60,7 +66,8 @@ public class AgentController {
                            RetrievalPlanner retrievalPlanner,
                            ToolRegistry toolRegistry,
                            AgentChatMemory agentChatMemory,
-                           SessionStateTools sessionStateTools) {
+                           SessionStateTools sessionStateTools,
+                           ConversationService conversationService) {
         this.houseServiceChatClient = houseServiceChatClient;
         this.subscriptionTools = subscriptionTools;
         this.projectTools = projectTools;
@@ -70,22 +77,22 @@ public class AgentController {
         this.toolRegistry = toolRegistry;
         this.agentChatMemory = agentChatMemory;
         this.sessionStateTools = sessionStateTools;
+        this.conversationService = conversationService;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chat(@RequestBody ChatRequest request) {
+    public Flux<String> chat(@RequestBody ChatRequest request, HttpServletRequest http) {
         long startTime = System.currentTimeMillis();
         if (request == null || !StringUtils.hasText(request.message())) {
             return Flux.just("请输入要办理的事项。");
         }
-        // 不能用 "default" 兜底：多实例 + 负载均衡下，前端漏传一次就等于所有客户共用一条记忆，
-        // 会出现"A 客户订的房被 B 客户问到"的串话。缺省时生成一次性 id：本轮无历史，也不会污染别人。
-        String conversationId;
-        if (StringUtils.hasText(request.conversationId())) {
-            conversationId = request.conversationId();
-        } else {
-            conversationId = UUID.randomUUID().toString();
-            log.warn("agent chat: 请求未带 conversationId，本轮按无历史处理（id={}），多轮连续性由前端保证", conversationId);
+        // P0-1：先鉴权（未登录/无权限抛 AccessDeniedException -> 403），再做会话归属校验。
+        UserContext user = Authorization.requirePermission(http, PermissionPoints.CHAT_USE);
+        // 归属校验：前端传了 conversationId 就校验归当前用户；没传则新建一条归当前用户的会话，
+        // 返回权威 id。多实例 + LB 下这道校验防止 A 客户拿 B 客户的 conversationId 读到 B 的记忆。
+        String conversationId = conversationService.getOrCreate(user, request.conversationId());
+        if (!StringUtils.hasText(request.conversationId())) {
+            log.info("agent chat: 请求未带 conversationId，已新建会话 id={} userId={}", conversationId, user.userId());
         }
 
         // 按选中的技能拼装提示词与工具：没被选中的技能不下发，避免上下文和工具槽位被稀释

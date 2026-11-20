@@ -3,7 +3,10 @@ package com.yusijia.houseclientservices.controller;
 import com.yusijia.houseclientservices.domain.view.HouseView;
 import com.yusijia.houseclientservices.domain.view.OrgView;
 import com.yusijia.houseclientservices.domain.view.PersonView;
+import com.yusijia.houseclientservices.security.Authorization;
+import com.yusijia.houseclientservices.security.PermissionPoints;
 import com.yusijia.houseclientservices.service.MasterDataService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -22,17 +25,20 @@ public class MasterDataController {
     }
 
     @GetMapping("/houses")
-    public List<HouseView> houses(@RequestParam(required = false) String keyword) {
+    public List<HouseView> houses(@RequestParam(required = false) String keyword, HttpServletRequest request) {
+        Authorization.requirePermission(request, PermissionPoints.DATA_HOUSE_SEARCH);
         return masterDataService.searchHouses(keyword);
     }
 
     @GetMapping("/persons")
-    public List<PersonView> persons(@RequestParam(required = false) String keyword) {
+    public List<PersonView> persons(@RequestParam(required = false) String keyword, HttpServletRequest request) {
+        Authorization.requirePermission(request, PermissionPoints.DATA_PERSON_SEARCH);
         return masterDataService.searchPersons(keyword);
     }
 
     @GetMapping("/orgs")
-    public List<OrgView> orgs(@RequestParam(required = false) String keyword) {
+    public List<OrgView> orgs(@RequestParam(required = false) String keyword, HttpServletRequest request) {
+        Authorization.requirePermission(request, PermissionPoints.DATA_ORG_SEARCH);
         return masterDataService.searchOrgs(keyword);
     }
 }

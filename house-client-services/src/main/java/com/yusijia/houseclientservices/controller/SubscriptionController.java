@@ -1,7 +1,10 @@
 package com.yusijia.houseclientservices.controller;
 
 import com.yusijia.houseclientservices.domain.view.SubscriptionView;
+import com.yusijia.houseclientservices.security.Authorization;
+import com.yusijia.houseclientservices.security.PermissionPoints;
 import com.yusijia.houseclientservices.service.SubscriptionService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -20,13 +23,16 @@ public class SubscriptionController {
     }
 
     @GetMapping
-    public List<SubscriptionView> list() {
+    public List<SubscriptionView> list(HttpServletRequest request) {
+        Authorization.requirePermission(request, PermissionPoints.SUBSCRIPTION_READ);
         return subscriptionService.list();
     }
 
     @GetMapping("/search")
     public List<SubscriptionView> search(@RequestParam(required = false) String houseLocation,
-                                         @RequestParam(required = false) String buyerName) {
+                                         @RequestParam(required = false) String buyerName,
+                                         HttpServletRequest request) {
+        Authorization.requirePermission(request, PermissionPoints.SUBSCRIPTION_READ);
         return subscriptionService.find(houseLocation, buyerName);
     }
 }
