@@ -107,3 +107,8 @@ Stop-Process -Id <PID>
 - `MemoryConfig` 不要注册第二个 `DataSource` Bean：会顶掉 Spring Boot 的 MySQL 自动装配；PG 池用 `db/PostgresDataSource`。
 - 每次改 `application.properties` / `resources/` 都要重新 `compile`，否则 `target\classes` 里是旧资源。
 - 冒烟结束后清理：`cp.txt`、Redis `chat:verify-*` / `session:verify-*`、PG 里 `verify-*` 摘要行。
+- **不要用 PowerShell `Set-Content` / `Get-Content -Raw` 改 Java 源文件**：默认按 GBK 读 UTF-8，
+  会把中文写成乱码且不可逆（`。` 的尾字节还会吞掉换行）。改代码一律用 edit/write 工具；
+  已经写坏了就 `git checkout -- <file>` 还原后重做。
+- 端到端造出的认购单会污染 `SubscriptionFlowTest` / `SubscriptionDataScopeTest`（它们依赖 V3 种子态）。
+  冒烟后按 `biz_no` 删掉 `subscription` 及 `subscription_person/house/org` 明细，再跑 `clean test`。
