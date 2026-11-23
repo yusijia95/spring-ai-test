@@ -1,6 +1,4 @@
-package com.yusijia.houseclientservices.config;
-
-import com.yusijia.houseclientservices.exception.BizException;
+package com.yusijia.houseclientservices.exception;
 import com.yusijia.houseclientservices.security.AccessDeniedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

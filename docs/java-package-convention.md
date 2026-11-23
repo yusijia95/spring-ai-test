@@ -215,9 +215,26 @@ public class SubscriptionService {
 | 权限点 | `域:资源:动作` | `chat:use`、`data:house:search` |
 | 权限点常量 | 大写下划线 | `CHAT_USE`、`DATA_HOUSE_SEARCH` |
 
-## 禁止事项
+## 权限：接口级看权限点，数据级看范围
 
-1. **不要**在 `security/` 放业务服务（`AuthService` 应该在 `service/`）
+两个机制分工，不要混用：
+
+| 机制 | 位置 | 回答的问题 | 拒绝方式 |
+|------|------|------------|----------|
+| 权限点 `PermissionPoints` + `Authorization` | controller / 接口层 | "这个角色能不能做这类操作" | `AccessDeniedException` → 403 |
+| 数据范围 `DataScope` | `@Tool` 工具内 / service 内 | "能在这个人的数据上做吗" | 返回原因字符串 → 模型转述给客户 |
+
+角色差异**优先用数据范围表达**，不要用"关掉权限点"来实现——否则自助客户会连自己的业务都办不了。
+
+```
+customer（自助客户）: 与坐席同样的权限点，但 personId 非空 → 只能操作本人数据
+agent（客服坐席）   : personId 为 null → 可代任意客户操作
+```
+
+工具内取当前用户用 `UserContextHolder.get()`（ThreadLocal，由 controller 在请求线程 set / finally clear），
+不要从参数里接收角色或用户 ID（模型可以伪造）。
+
+## 禁止事项1. **不要**在 `security/` 放业务服务（`AuthService` 应该在 `service/`）
 2. **不要**在 `service/` 放 Redis/PG 实现（应该在 `security/redis/` 或 `agent/memory/redis/`）
 3. **不要**在 `config/` 放异常处理（应该在 `exception/`）
 4. **不要**在 `domain/` 放 DTO（应该在 `controller/dto/`）

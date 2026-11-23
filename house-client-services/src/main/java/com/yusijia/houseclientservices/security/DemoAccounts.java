@@ -1,5 +1,6 @@
 package com.yusijia.houseclientservices.security;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -12,18 +13,18 @@ import java.util.Map;
  * 将来接真身份时：本类整体删除，{@code AuthService} 改调 SSO / 查 user_account，
  * 返回的 {@link UserContext} 结构不变，下游无感。
  * <p>
- * 默认账号（可被 {@code agent.security.demo-accounts} 环境变量覆盖，格式
- * {@code username:role:displayName,username2:role2}）：
+ * 默认账号：
  * <ul>
- *   <li>{@code customer1} → customer 角色（自助客户）</li>
- *   <li>{@code agent1} → agent 角色（客服坐席）</li>
+ *   <li>{@code customer1} → customer 角色，personId=5001（对应 V3 种子数据里的"张三"，
+ *       自助客户只能对本人 data 操作）</li>
+ *   <li>{@code agent1} → agent 角色，personId=null（坐席不绑定个人档案，可代任意客户）</li>
  * </ul>
  */
 public final class DemoAccounts {
 
     private static final List<UserContext> DEFAULTS = List.of(
-            new UserContext(1L, "customer1", UserContext.ROLE_CUSTOMER, "演示客户1"),
-            new UserContext(2L, "agent1", UserContext.ROLE_AGENT, "演示坐席1")
+            new UserContext(1L, "customer1", UserContext.ROLE_CUSTOMER, "演示客户1", 5001L),
+            new UserContext(2L, "agent1", UserContext.ROLE_AGENT, "演示坐席1", null)
     );
 
     private static final Map<String, UserContext> BY_USERNAME = build(DEFAULTS);
@@ -39,7 +40,7 @@ public final class DemoAccounts {
     }
 
     private static Map<String, UserContext> build(List<UserContext> accounts) {
-        java.util.HashMap<String, UserContext> map = new java.util.HashMap<>();
+        Map<String, UserContext> map = new HashMap<>();
         for (UserContext u : accounts) {
             map.put(u.username(), u);
         }

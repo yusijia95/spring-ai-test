@@ -5,8 +5,13 @@ import com.yusijia.houseclientservices.domain.view.OrgView;
 import com.yusijia.houseclientservices.domain.view.PersonView;
 import com.yusijia.houseclientservices.domain.view.SubscriptionView;
 import com.yusijia.houseclientservices.exception.BizException;
+import com.yusijia.houseclientservices.security.DataScope;
+import com.yusijia.houseclientservices.security.UserContext;
+import com.yusijia.houseclientservices.security.UserContextHolder;
 import com.yusijia.houseclientservices.service.MasterDataService;
 import com.yusijia.houseclientservices.service.SubscriptionService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -31,6 +36,8 @@ import java.util.stream.Collectors;
  */
 @Component
 public class SubscriptionTools {
+
+    private static final Logger log = LoggerFactory.getLogger(SubscriptionTools.class);
 
     private final MasterDataService masterDataService;
     private final SubscriptionService subscriptionService;
@@ -131,12 +138,21 @@ public class SubscriptionTools {
             @ToolParam(description = "个人客户ID，多个用英文逗号分隔，必须来自 searchPerson 结果；企业购房时传空字符串", required = false) String personIds,
             @ToolParam(description = "单位客户ID，多个用英文逗号分隔，必须来自 searchOrg 结果；个人购房时传空字符串", required = false) String orgIds,
             @ToolParam(description = "客户是否已确认认购，必须为 true 才执行创建") boolean confirmed) {
+        List<Long> rooms = parseIds(houseIds);
+        List<Long> persons = parseIds(personIds);
+        List<Long> orgs = parseIds(orgIds);
+        // 数据范围：自助客户只能为本人办理（坐席不限），预览阶段同样拦截，避免预览泄漏他人信息
+        UserContext user = UserContextHolder.get();
+        String violation = DataScope.createViolation(user, persons, orgs);
+        if (violation != null) {
+            log.warn("subscription: 数据范围拒绝 create userId={} role={} personIds={} orgIds={} reason={}",
+                    user == null ? null : user.userId(),
+                    user == null ? null : user.role(), persons, orgs, violation);
+            return "生成失败：" + violation;
+        }
         if (!confirmed) {
             // 预览模式：只查询房屋和购买方信息，不创建
             try {
-                List<Long> rooms = parseIds(houseIds);
-                List<Long> persons = parseIds(personIds);
-                List<Long> orgs = parseIds(orgIds);
                 if (rooms.isEmpty()) {
                     return "预览失败：请至少选择一套房屋。";
                 }
@@ -169,8 +185,7 @@ public class SubscriptionTools {
         createSubscriptionCalled.set(true);
         String token = computeIdempotencyKey(houseIds, personIds, orgIds);
         try {
-            SubscriptionView view = subscriptionService.create(
-                    parseIds(houseIds), parseIds(personIds), parseIds(orgIds), token);
+            SubscriptionView view = subscriptionService.create(rooms, persons, orgs, token);
             return "认购业务已生成。编号=" + view.bizNo()
                     + "，房屋坐落=" + String.join("、", view.houseLocations())
                     + "，购买方=" + String.join("、", view.buyerNames())
@@ -214,7 +229,8 @@ public class SubscriptionTools {
         if (!StringUtils.hasText(houseLocation) && !StringUtils.hasText(buyerName)) {
             return "查询失败：请提供房屋坐落或购买方姓名。";
         }
-        List<SubscriptionView> matches = subscriptionService.find(houseLocation, buyerName);
+        List<SubscriptionView> matches = subscriptionService.find(houseLocation, buyerName,
+                DataScope.queryOwnerFilter(UserContextHolder.get()));
         if (matches.isEmpty()) {
             return "未找到匹配的认购业务。";
         }
@@ -232,6 +248,15 @@ public class SubscriptionTools {
             @ToolParam(description = "客户是否已确认撤销，必须为 true 才执行") boolean confirmed) {
         if (!confirmed) {
             return "撤销未执行：客户尚未确认。请先展示房屋坐落和购房人姓名，待客户确认后再调用，并将 confirmed 设为 true。";
+        }
+        // 数据范围：自助客户只能撤销本人名下的认购（坐席不限）
+        UserContext user = UserContextHolder.get();
+        String violation = DataScope.cancelViolation(user, subscriptionService.buyerPersonIds(bizNo));
+        if (violation != null) {
+            log.warn("subscription: 数据范围拒绝 cancel userId={} role={} bizNo={} reason={}",
+                    user == null ? null : user.userId(),
+                    user == null ? null : user.role(), bizNo, violation);
+            return "撤销失败：" + violation;
         }
         try {
             SubscriptionView view = subscriptionService.cancel(bizNo, true);

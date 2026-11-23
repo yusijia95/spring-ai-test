@@ -10,6 +10,7 @@ import com.yusijia.houseclientservices.controller.dto.ChatRequest;
 import com.yusijia.houseclientservices.security.Authorization;
 import com.yusijia.houseclientservices.security.PermissionPoints;
 import com.yusijia.houseclientservices.security.UserContext;
+import com.yusijia.houseclientservices.security.UserContextHolder;
 import com.yusijia.houseclientservices.service.ConversationService;
 import jakarta.servlet.http.HttpServletRequest;
 import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
@@ -152,6 +153,8 @@ public class AgentController {
                 .map(cb -> cb.getToolDefinition().name()).toList();
         boolean hasRetrieval = retrieval != null && !retrieval.isBlank();
 
+        // 登录用户带进工具线程（ThreadLocal）：工具内做"自助客户只能操作本人数据"的校验
+        UserContextHolder.set(user);
         try {
             // 本轮没有业务工具（纯问答 / 检索结果已由系统注入）时走真流式：
             // 不需要"漏答补齐"和"认购防幻觉"这类对全文的校验，逐字返回体验更好。
@@ -172,6 +175,7 @@ public class AgentController {
             return Flux.just(answer);
         } finally {
             SessionStateTools.unbind();
+            UserContextHolder.clear();
             BaiduMapToolGuard.clear();
             ExternalContentGuard.clear();
         }

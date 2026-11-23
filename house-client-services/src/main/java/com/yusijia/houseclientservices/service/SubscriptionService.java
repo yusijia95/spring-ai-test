@@ -234,6 +234,16 @@ public class SubscriptionService {
     }
 
     public List<SubscriptionView> find(String houseLocation, String buyerName) {
+        return find(houseLocation, buyerName, null);
+    }
+
+    /**
+     * 查询认购单，可按归属人过滤。
+     * <p>
+     * {@code ownerPersonId} 非空时，只返回购买个人中包含该 ID 的认购单——
+     * 自助客户只能看到自己的认购，坐席传 null 看全量（见 {@code DataScope#queryOwnerFilter}）。
+     */
+    public List<SubscriptionView> find(String houseLocation, String buyerName, Long ownerPersonId) {
         Set<Long> matched = null;
 
         if (StringUtils.hasText(houseLocation)) {
@@ -257,6 +267,14 @@ public class SubscriptionService {
             matched = matched == null ? byBuyer : intersect(matched, byBuyer);
         }
 
+        if (ownerPersonId != null) {
+            Set<Long> byOwner = subscriptionPersonMapper.selectList(new LambdaQueryWrapper<SubscriptionPerson>()
+                            .eq(SubscriptionPerson::getStatus, 1)
+                            .eq(SubscriptionPerson::getPersonId, ownerPersonId))
+                    .stream().map(SubscriptionPerson::getSubscriptionId).collect(Collectors.toSet());
+            matched = matched == null ? byOwner : intersect(matched, byOwner);
+        }
+
         if (matched == null || matched.isEmpty()) {
             return List.of();
         }
@@ -268,6 +286,30 @@ public class SubscriptionService {
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
         return toViews(subscriptions);
+    }
+
+    /**
+     * 该业务编号下所有有效个人购买方的 person_id。
+     * <p>
+     * 撤销前用它判断"这笔认购是不是当前客户本人的"（{@code DataScope#cancelViolation}）。
+     * 业务编号不存在时返回空集合。
+     */
+    public Set<Long> buyerPersonIds(String bizNo) {
+        if (!StringUtils.hasText(bizNo)) {
+            return Set.of();
+        }
+        Subscription subscription = subscriptionMapper.selectOne(new LambdaQueryWrapper<Subscription>()
+                .eq(Subscription::getBizNo, bizNo.trim())
+                .last("LIMIT 1"));
+        if (subscription == null) {
+            return Set.of();
+        }
+        return subscriptionPersonMapper.selectList(new LambdaQueryWrapper<SubscriptionPerson>()
+                        .eq(SubscriptionPerson::getStatus, 1)
+                        .eq(SubscriptionPerson::getSubscriptionId, subscription.getId()))
+                .stream()
+                .map(SubscriptionPerson::getPersonId)
+                .collect(Collectors.toSet());
     }
 
     @Transactional(rollbackFor = Exception.class)

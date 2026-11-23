@@ -25,9 +25,10 @@ class AuthorizationTest {
     }
 
     @Test
-    void customer_lacks_agentOnlyPermissions() {
-        assertThat(Authorization.hasPermission(customer, PermissionPoints.SUBSCRIPTION_CREATE)).isFalse();
-        assertThat(Authorization.hasPermission(customer, PermissionPoints.SUBSCRIPTION_CANCEL)).isFalse();
+    void customer_canCreateAndCancelOwnSubscription() {
+        // 自助客户的核心能力：给自己办认购、撤销。角色差异在数据范围（DataScope），不在权限点
+        assertThat(Authorization.hasPermission(customer, PermissionPoints.SUBSCRIPTION_CREATE)).isTrue();
+        assertThat(Authorization.hasPermission(customer, PermissionPoints.SUBSCRIPTION_CANCEL)).isTrue();
     }
 
     @Test

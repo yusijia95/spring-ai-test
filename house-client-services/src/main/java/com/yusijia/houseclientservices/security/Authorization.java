@@ -11,9 +11,10 @@ import java.util.Set;
  * <p>
  * 角色 × 权限点矩阵写死在这里：
  * <ul>
- *   <li>{@code customer}：chat:use、chat:conversation:read、data:house:search、
- *       data:person:search、data:org:search、subscription:read</li>
- *   <li>{@code agent}：上面全部 + subscription:create、subscription:cancel</li>
+ *   <li>{@code customer}：chat:use、chat:conversation:read、data:house/person/org:search、
+ *       subscription:read、subscription:create、subscription:cancel</li>
+ *   <li>{@code agent}：与 customer 相同（坐席天然能做客户能做的事），
+ *       区别不在权限点而在数据范围——见 {@link DataScope}</li>
  * </ul>
  * <p>
  * 控制器里调用 {@link #requirePermission(HttpServletRequest, String)}，
@@ -30,7 +31,10 @@ public final class Authorization {
             PermissionPoints.DATA_HOUSE_SEARCH,
             PermissionPoints.DATA_PERSON_SEARCH,
             PermissionPoints.DATA_ORG_SEARCH,
-            PermissionPoints.SUBSCRIPTION_READ
+            PermissionPoints.SUBSCRIPTION_READ,
+            // 自助客户给自己办认购 / 撤销：权限点放开，"只能操作本人数据"由 DataScope 在工具内兜底
+            PermissionPoints.SUBSCRIPTION_CREATE,
+            PermissionPoints.SUBSCRIPTION_CANCEL
     );
 
     private static final Set<String> AGENT = Set.of(
