@@ -12,10 +12,11 @@ import java.util.regex.Pattern;
 /**
  * 纠正模型对百度地图工具参数的误用：必须使用最近一次地理编码坐标，
  * 且将逗号拼接的 query 拆成多次检索。
+ * <p>
+ * "最近一次地理编码坐标"存在 {@link ToolExecutionContext} 里随请求传入，不用 ThreadLocal。
  */
 public final class BaiduMapToolGuard {
 
-    private static final ThreadLocal<String> LAST_GEOCODE_LOCATION = new ThreadLocal<>();
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Pattern LAT = Pattern.compile("['\"]lat['\"]\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
     private static final Pattern LNG = Pattern.compile("['\"]lng['\"]\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
@@ -23,12 +24,9 @@ public final class BaiduMapToolGuard {
     private BaiduMapToolGuard() {
     }
 
-    public static void clear() {
-        LAST_GEOCODE_LOCATION.remove();
-    }
-
-    public static String lastLocation() {
-        return LAST_GEOCODE_LOCATION.get();
+    /** 本轮最近一次地理编码坐标；无上下文或无记录时返回 null。 */
+    public static String lastLocation(ToolExecutionContext exec) {
+        return exec == null ? null : exec.lastGeocodeLocation();
     }
 
     /**
@@ -63,8 +61,8 @@ public final class BaiduMapToolGuard {
         }
     }
 
-    public static void rememberGeocode(String toolOutput) {
-        if (toolOutput == null || toolOutput.isBlank()) {
+    public static void rememberGeocode(ToolExecutionContext exec, String toolOutput) {
+        if (exec == null || toolOutput == null || toolOutput.isBlank()) {
             return;
         }
         try {
@@ -88,23 +86,23 @@ public final class BaiduMapToolGuard {
                 lng = root.path("lng").asText(null);
             }
             if (lat != null && lng != null) {
-                LAST_GEOCODE_LOCATION.set(lat + "," + lng);
+                exec.rememberGeocodeLocation(lat + "," + lng);
             }
         } catch (Exception e) {
             // JSON 解析失败，保留原正则回退
             Matcher lat = LAT.matcher(toolOutput);
             Matcher lng = LNG.matcher(toolOutput);
             if (lat.find() && lng.find()) {
-                LAST_GEOCODE_LOCATION.set(lat.group(1) + "," + lng.group(1));
+                exec.rememberGeocodeLocation(lat.group(1) + "," + lng.group(1));
             }
         }
     }
 
-    public static String rewriteSearchPlacesInput(String toolInput) {
+    public static String rewriteSearchPlacesInput(ToolExecutionContext exec, String toolInput) {
         if (toolInput == null || toolInput.isBlank()) {
             return toolInput;
         }
-        String forced = LAST_GEOCODE_LOCATION.get();
+        String forced = lastLocation(exec);
         try {
             JsonNode node = MAPPER.readTree(toolInput);
             if (!(node instanceof ObjectNode obj)) {

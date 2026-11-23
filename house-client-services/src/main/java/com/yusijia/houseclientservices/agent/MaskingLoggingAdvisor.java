@@ -47,7 +47,11 @@ public class MaskingLoggingAdvisor implements BaseAdvisor {
     private final int order;
 
     /**
-     * call 路径是线程内串行执行的，用 ThreadLocal 记开始时间即可；流式路径不用它。
+     * 仅用于 call 路径的耗时统计：{@code before/after} 在同一个线程上成对执行。
+     * <p>
+     * <b>流式路径不能用它</b>——{@code after} 不在调用线程上执行，写进去就没人 remove，
+     * 线程池里的线程会一直留一份。所以 {@link #adviseStream} 用局部变量算耗时，
+     * 见那里的注释。
      */
     private final ThreadLocal<Long> requestStartNanos = new ThreadLocal<>();
 
@@ -63,12 +67,7 @@ public class MaskingLoggingAdvisor implements BaseAdvisor {
     @Override
     public ChatClientRequest before(ChatClientRequest chatClientRequest, AdvisorChain advisorChain) {
         requestStartNanos.set(System.nanoTime());
-        try {
-            logRequest(chatClientRequest);
-        } catch (RuntimeException e) {
-            // 日志失败绝不能影响对话
-            log.debug("AI 请求日志打印失败: {}", e.getMessage());
-        }
+        safeLogRequest(chatClientRequest);
         return chatClientRequest;
     }
 
@@ -84,6 +83,15 @@ public class MaskingLoggingAdvisor implements BaseAdvisor {
         return chatClientResponse;
     }
 
+    /** 日志失败绝不能影响对话 */
+    private void safeLogRequest(ChatClientRequest request) {
+        try {
+            logRequest(request);
+        } catch (RuntimeException e) {
+            log.debug("AI 请求日志打印失败: {}", e.getMessage());
+        }
+    }
+
     /**
      * 流式路径：必须先聚合，最后一帧的 finishReason 才带得到完整回复，
      * 否则 after 里统计到的只是增量片段。
@@ -92,14 +100,15 @@ public class MaskingLoggingAdvisor implements BaseAdvisor {
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
                                                  StreamAdvisorChain streamAdvisorChain) {
         long startNanos = System.nanoTime();
-        ChatClientRequest processed = before(chatClientRequest, streamAdvisorChain);
+        // 不调 before()：那里会写 ThreadLocal，而流式路径的 after() 不会在调用线程上执行，
+        // 写进去就没人 remove，线程池线程会一直留一份。耗时用局部变量，日志直接打。
+        safeLogRequest(chatClientRequest);
         return new ChatClientMessageAggregator().aggregateChatClientResponse(
-                streamAdvisorChain.nextStream(processed),
+                streamAdvisorChain.nextStream(chatClientRequest),
                 aggregated -> {
                     try {
                         logResponse(aggregated, startNanos);
                     } catch (RuntimeException e) {
-                        requestStartNanos.remove();
                         log.debug("AI 响应日志打印失败: {}", e.getMessage());
                     }
                 });

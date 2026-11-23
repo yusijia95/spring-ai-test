@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -175,7 +176,7 @@ public class WebSearchTools {
             不要直接把客户原话整句塞进来。
             一次结果可能覆盖不全，信息不足时换不同角度再调用一次（最多 3 次）。
             返回若干条结果，每条含标题、来源、日期、摘要和链接；标注"信息较旧"的日期超过两年。""")
-    public String webSearch(String query) {
+    public String webSearch(String query, ToolContext toolContext) {
         if (query == null || query.isBlank()) {
             return "请提供要检索的问题。";
         }
@@ -192,6 +193,16 @@ public class WebSearchTools {
         }
         if (results.isEmpty()) {
             return "未检索到相关内容。";
+        }
+
+        // 检索结果属于外部不可信内容：标记本轮已读外部资料，写工具随后熔断。
+        // 之前这条路径没打标记，模型自己发起 webSearch 再写库是可以绕过熔断的，这里补上。
+        ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
+        if (exec != null) {
+            exec.markExternalContentSeen();
+        } else {
+            log.warn("联网检索缺少工具上下文，无法标记外部内容（写工具熔断将失效），query={}",
+                    PiiMasker.mask(trimmed));
         }
 
         List<WebSearchFormat.RerankHit> hits = rerank(trimmed, results);

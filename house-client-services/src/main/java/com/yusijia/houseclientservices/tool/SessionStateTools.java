@@ -3,6 +3,7 @@ package com.yusijia.houseclientservices.tool;
 import com.yusijia.houseclientservices.agent.memory.SessionStateStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -17,29 +18,18 @@ import java.util.Map;
  * 让模型在拿到真实数据的那一刻把它写成结构化事实，之后每轮由系统注入，
  * 业务正确性就不再依赖"模型能不能记住"。
  * <p>
- * ThreadLocal 绑定会话：工具方法签名里不能出现 conversationId（模型会瞎填），
- * 由 {@code AgentController} 在调用链路上绑定本轮会话。
- * 注意只在<b>非流式</b>（{@code .call()}）路径绑定——流式路径不挂工具。
+ * 会话 ID 不放进工具参数（模型会瞎填），而是由框架注入的 {@link ToolContext}
+ * 携带本轮上下文——同步/流式路径都成立，不依赖线程。
  */
 @Component
 public class SessionStateTools {
 
     private static final Logger log = LoggerFactory.getLogger(SessionStateTools.class);
 
-    private static final ThreadLocal<String> CONVERSATION_ID = new ThreadLocal<>();
-
     private final SessionStateStore repository;
 
     public SessionStateTools(SessionStateStore repository) {
         this.repository = repository;
-    }
-
-    public static void bind(String conversationId) {
-        CONVERSATION_ID.set(conversationId);
-    }
-
-    public static void unbind() {
-        CONVERSATION_ID.remove();
     }
 
     @Tool(description = """
@@ -55,8 +45,10 @@ public class SessionStateTools {
             """)
     public String rememberSessionFact(
             @ToolParam(description = "字段名，只能是 currentProject、currentHouse、pendingSubscription、budget、districtPref 之一") String key,
-            @ToolParam(description = "要记住的事实，尽量简短，不要包含客套话") String value) {
-        String conversationId = CONVERSATION_ID.get();
+            @ToolParam(description = "要记住的事实，尽量简短，不要包含客套话") String value,
+            ToolContext toolContext) {
+        ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
+        String conversationId = exec == null ? null : exec.conversationId();
         if (!StringUtils.hasText(conversationId)) {
             return "未记录：当前没有绑定会话。";
         }

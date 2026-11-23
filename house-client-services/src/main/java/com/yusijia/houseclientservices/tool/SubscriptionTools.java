@@ -7,11 +7,11 @@ import com.yusijia.houseclientservices.domain.view.SubscriptionView;
 import com.yusijia.houseclientservices.exception.BizException;
 import com.yusijia.houseclientservices.security.DataScope;
 import com.yusijia.houseclientservices.security.UserContext;
-import com.yusijia.houseclientservices.security.UserContextHolder;
 import com.yusijia.houseclientservices.service.MasterDataService;
 import com.yusijia.houseclientservices.service.SubscriptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -42,24 +42,10 @@ public class SubscriptionTools {
     private final MasterDataService masterDataService;
     private final SubscriptionService subscriptionService;
 
-    /**
-     * 追踪当前请求中 createSubscription 是否被实际调用，用于检测模型幻觉。
-     */
-    private final ThreadLocal<Boolean> createSubscriptionCalled = ThreadLocal.withInitial(() -> false);
-
     public SubscriptionTools(MasterDataService masterDataService,
                              SubscriptionService subscriptionService) {
         this.masterDataService = masterDataService;
         this.subscriptionService = subscriptionService;
-    }
-
-    /**
-     * 消费并重置标记：返回 createSubscription 是否被调用过，然后清除标记。
-     */
-    public boolean consumeCreateSubscriptionCalled() {
-        Boolean result = createSubscriptionCalled.get();
-        createSubscriptionCalled.remove();
-        return result != null && result;
     }
 
     @Tool(description = "按关键字查询房屋。生成认购前必须先调用本工具获取真实房屋ID。关键字可以是坐落片段，如“文一西路”“1幢101”；留空则列出前20套。")
@@ -137,12 +123,14 @@ public class SubscriptionTools {
             @ToolParam(description = "房屋ID，多个用英文逗号分隔，必须来自 searchHouse 结果") String houseIds,
             @ToolParam(description = "个人客户ID，多个用英文逗号分隔，必须来自 searchPerson 结果；企业购房时传空字符串", required = false) String personIds,
             @ToolParam(description = "单位客户ID，多个用英文逗号分隔，必须来自 searchOrg 结果；个人购房时传空字符串", required = false) String orgIds,
-            @ToolParam(description = "客户是否已确认认购，必须为 true 才执行创建") boolean confirmed) {
+            @ToolParam(description = "客户是否已确认认购，必须为 true 才执行创建") boolean confirmed,
+            ToolContext toolContext) {
         List<Long> rooms = parseIds(houseIds);
         List<Long> persons = parseIds(personIds);
         List<Long> orgs = parseIds(orgIds);
+        ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
+        UserContext user = exec == null ? null : exec.user();
         // 数据范围：自助客户只能为本人办理（坐席不限），预览阶段同样拦截，避免预览泄漏他人信息
-        UserContext user = UserContextHolder.get();
         String violation = DataScope.createViolation(user, persons, orgs);
         if (violation != null) {
             log.warn("subscription: 数据范围拒绝 create userId={} role={} personIds={} orgIds={} reason={}",
@@ -182,7 +170,9 @@ public class SubscriptionTools {
                 return "预览失败：" + e.getMessage();
             }
         }
-        createSubscriptionCalled.set(true);
+        if (exec != null) {
+            exec.markCreateSubscriptionCalled();
+        }
         String token = computeIdempotencyKey(houseIds, personIds, orgIds);
         try {
             SubscriptionView view = subscriptionService.create(rooms, persons, orgs, token);
@@ -225,12 +215,20 @@ public class SubscriptionTools {
     @Tool(description = "查询认购业务，仅用于撤销前核对。必须提供房屋坐落或购买方姓名至少一项。只返回编号、房屋坐落、购房人和状态，不执行撤销。")
     public String findSubscription(
             @ToolParam(description = "房屋坐落关键字，可与姓名二选一或同时提供", required = false) String houseLocation,
-            @ToolParam(description = "购买方姓名或单位名称，可与坐落二选一或同时提供", required = false) String buyerName) {
+            @ToolParam(description = "购买方姓名或单位名称，可与坐落二选一或同时提供", required = false) String buyerName,
+            ToolContext toolContext) {
         if (!StringUtils.hasText(houseLocation) && !StringUtils.hasText(buyerName)) {
             return "查询失败：请提供房屋坐落或购买方姓名。";
         }
+        ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
+        UserContext user = exec == null ? null : exec.user();
+        String scopeViolation = DataScope.queryViolation(user);
+        if (scopeViolation != null) {
+            log.warn("subscription: 数据范围拒绝 find reason={}", scopeViolation);
+            return "查询失败：" + scopeViolation;
+        }
         List<SubscriptionView> matches = subscriptionService.find(houseLocation, buyerName,
-                DataScope.queryOwnerFilter(UserContextHolder.get()));
+                DataScope.queryOwnerFilter(user));
         if (matches.isEmpty()) {
             return "未找到匹配的认购业务。";
         }
@@ -245,12 +243,14 @@ public class SubscriptionTools {
     @Tool(description = "撤销认购业务。必须使用 findSubscription 查询得到的编号，且仅当客户已明确确认撤销时将 confirmed 设为 true。未确认时禁止调用。")
     public String cancelSubscription(
             @ToolParam(description = "业务编号，必须来自 findSubscription 的查询结果") String bizNo,
-            @ToolParam(description = "客户是否已确认撤销，必须为 true 才执行") boolean confirmed) {
+            @ToolParam(description = "客户是否已确认撤销，必须为 true 才执行") boolean confirmed,
+            ToolContext toolContext) {
         if (!confirmed) {
             return "撤销未执行：客户尚未确认。请先展示房屋坐落和购房人姓名，待客户确认后再调用，并将 confirmed 设为 true。";
         }
         // 数据范围：自助客户只能撤销本人名下的认购（坐席不限）
-        UserContext user = UserContextHolder.get();
+        ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
+        UserContext user = exec == null ? null : exec.user();
         String violation = DataScope.cancelViolation(user, subscriptionService.buyerPersonIds(bizNo));
         if (violation != null) {
             log.warn("subscription: 数据范围拒绝 cancel userId={} role={} bizNo={} reason={}",

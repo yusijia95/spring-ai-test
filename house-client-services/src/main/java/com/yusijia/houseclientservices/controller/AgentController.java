@@ -10,14 +10,11 @@ import com.yusijia.houseclientservices.controller.dto.ChatRequest;
 import com.yusijia.houseclientservices.security.Authorization;
 import com.yusijia.houseclientservices.security.PermissionPoints;
 import com.yusijia.houseclientservices.security.UserContext;
-import com.yusijia.houseclientservices.security.UserContextHolder;
 import com.yusijia.houseclientservices.service.ConversationService;
 import jakarta.servlet.http.HttpServletRequest;
-import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
-import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
 import com.yusijia.houseclientservices.tool.SessionStateTools;
-import com.yusijia.houseclientservices.tool.SubscriptionTools;
+import com.yusijia.houseclientservices.tool.ToolExecutionContext;
 import com.yusijia.houseclientservices.tool.WebSearchTools;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,7 +46,6 @@ public class AgentController {
     private static final Logger log = LoggerFactory.getLogger(AgentController.class);
 
     private final ChatClient houseServiceChatClient;
-    private final SubscriptionTools subscriptionTools;
     private final ProjectTools projectTools;
     private final WebSearchTools webSearchTools;
     private final SkillSelector skillSelector;
@@ -60,7 +56,6 @@ public class AgentController {
     private final ConversationService conversationService;
 
     public AgentController(@Qualifier("houseServiceChatClient") ChatClient houseServiceChatClient,
-                           SubscriptionTools subscriptionTools,
                            ProjectTools projectTools,
                            WebSearchTools webSearchTools,
                            SkillSelector skillSelector,
@@ -70,7 +65,6 @@ public class AgentController {
                            SessionStateTools sessionStateTools,
                            ConversationService conversationService) {
         this.houseServiceChatClient = houseServiceChatClient;
-        this.subscriptionTools = subscriptionTools;
         this.projectTools = projectTools;
         this.webSearchTools = webSearchTools;
         this.skillSelector = skillSelector;
@@ -142,43 +136,34 @@ public class AgentController {
                 skills.stream().map(Skill::name).collect(Collectors.toList()),
                 toolCallbacks.stream().map(callback -> callback.getToolDefinition().name()).toList());
 
-        BaiduMapToolGuard.clear();
-        projectTools.clear();
-        // 本轮读了外部网页正文就挂标记：写工具在 ToolRegistry 里被熔断，标记随 finally 清掉
-        ExternalContentGuard.clear();
+        // 本轮工具上下文：登录用户、会话 ID、外部内容标记、工具事实全部装在这里，
+        // 由 prompt().toolContext(...) 显式随请求下传，不依赖线程（ThreadLocal 在流式/并行下会静默失效）。
+        ToolExecutionContext exec = new ToolExecutionContext(user, conversationId);
         if (retrieval != null && !retrieval.isBlank()) {
-            ExternalContentGuard.markSeen();
+            // 本轮读了外部网页正文：写工具在 ToolRegistry 里按此标记熔断
+            exec.markExternalContentSeen();
         }
         List<String> toolNames = toolCallbacks.stream()
                 .map(cb -> cb.getToolDefinition().name()).toList();
         boolean hasRetrieval = retrieval != null && !retrieval.isBlank();
+        Map<String, Object> toolContext = Map.of(ToolExecutionContext.KEY, exec);
 
-        // 登录用户带进工具线程（ThreadLocal）：工具内做"自助客户只能操作本人数据"的校验
-        UserContextHolder.set(user);
-        try {
-            // 本轮没有业务工具（纯问答 / 检索结果已由系统注入）时走真流式：
-            // 不需要"漏答补齐"和"认购防幻觉"这类对全文的校验，逐字返回体验更好。
-            if (toolCallbacks.isEmpty()) {
-                Flux<String> flux = withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, request.message())
-                        .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
-                        .stream()
-                        .content()
-                        .transform(this::stripLeadingNoise)
-                        .switchIfEmpty(Flux.just("抱歉，未能处理您的请求，请您重新描述。"));
-                return attachSummary(flux, conversationId, skills, toolNames, hasRetrieval, startTime);
-            }
-            // 工具由模型在 .call() 里同步执行，跑在同一线程上，所以 ThreadLocal 能传进工具。
-            // 流式路径不挂业务工具，不需要绑定。
-            SessionStateTools.bind(conversationId);
-            String answer = answerWithTools(systemPrompt, retrieval, request.message(), toolCallbacks, conversationId);
-            logSummary(conversationId, skills, toolNames, hasRetrieval, answer, startTime);
-            return Flux.just(answer);
-        } finally {
-            SessionStateTools.unbind();
-            UserContextHolder.clear();
-            BaiduMapToolGuard.clear();
-            ExternalContentGuard.clear();
+        // 本轮没有业务工具（纯问答 / 检索结果已由系统注入）时走真流式：
+        // 不需要"漏答补齐"和"认购防幻觉"这类对全文的校验，逐字返回体验更好。
+        if (toolCallbacks.isEmpty()) {
+            Flux<String> flux = withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, request.message())
+                    .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
+                    .toolContext(toolContext)
+                    .stream()
+                    .content()
+                    .transform(this::stripLeadingNoise)
+                    .switchIfEmpty(Flux.just("抱歉，未能处理您的请求，请您重新描述。"));
+            return attachSummary(flux, conversationId, skills, toolNames, hasRetrieval, startTime);
         }
+        String answer = answerWithTools(systemPrompt, retrieval, request.message(), toolCallbacks,
+                conversationId, exec);
+        logSummary(conversationId, skills, toolNames, hasRetrieval, answer, startTime);
+        return Flux.just(answer);
     }
 
     /**
@@ -250,10 +235,12 @@ public class AgentController {
      * </ul>
      */
     private String answerWithTools(String systemPrompt, String retrieval, String message,
-                                   List<ToolCallback> toolCallbacks, String conversationId) {
+                                   List<ToolCallback> toolCallbacks, String conversationId,
+                                   ToolExecutionContext exec) {
         ChatResponse chatResponse = withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, message)
                 .toolCallbacks(toolCallbacks)
                 .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
+                .toolContext(Map.of(ToolExecutionContext.KEY, exec))
                 .call()
                 .chatResponse();
         String text = chatResponse == null || chatResponse.getResult() == null
@@ -266,7 +253,7 @@ public class AgentController {
 
         // 兜底：模型查了楼盘却把"住宅与价格"这一问吞掉时，用工具事实补齐
         if (StringUtils.hasText(text)) {
-            String housingNote = projectTools.unansweredHousingNote(text);
+            String housingNote = projectTools.unansweredHousingNote(exec, text);
             if (housingNote != null) {
                 log.info("agent chat: 模型漏答楼盘，已补齐住宅与价格小节");
                 text = housingNote + "\n\n" + text;
@@ -275,7 +262,7 @@ public class AgentController {
 
         // 防幻觉校验：如果模型声称"认购已生成"但 createSubscription 工具未被实际调用，拦截编造的响应
         if (text != null && (text.contains("认购已生成") || text.contains("认购业务已生成"))
-                && !subscriptionTools.consumeCreateSubscriptionCalled()) {
+                && !exec.createSubscriptionCalled()) {
             return "抱歉，认购操作未能完成，请您重新描述需求，我再为您办理。";
         }
 

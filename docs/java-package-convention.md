@@ -231,10 +231,23 @@ customer（自助客户）: 与坐席同样的权限点，但 personId 非空 �
 agent（客服坐席）   : personId 为 null → 可代任意客户操作
 ```
 
-工具内取当前用户用 `UserContextHolder.get()`（ThreadLocal，由 controller 在请求线程 set / finally clear），
-不要从参数里接收角色或用户 ID（模型可以伪造）。
+工具内取当前用户走 Spring AI 的 `ToolContext`：controller 用
+`prompt().toolContext(Map.of(ToolExecutionContext.KEY, exec))` 显式下传本轮上下文，
+`@Tool` 方法声明 `ToolContext` 参数后用 `ToolExecutionContext.of(toolContext)` 取。
+**不要用 ThreadLocal**——控制器返回 `Flux<String>`，工具在响应式操作符之后/并行调度/虚拟线程上
+执行时线程早就换了，而且失效方式是静默放行（fail-open）。
+也不要从工具参数里接收角色或用户 ID（模型可以伪造）。
 
-## 禁止事项1. **不要**在 `security/` 放业务服务（`AuthService` 应该在 `service/`）
+`DataScope` 一律 **fail-closed**：`user == null`（上下文缺失）按拒绝处理，绝不能当成"坐席，不限制"。
+查询类先调 `queryViolation`，再调 `queryOwnerFilter`（后者对 null 直接抛异常，避免"返回 null = 不过滤"的越权）。
+
+包装 `ToolCallback` 时必须重写 `call(String, ToolContext)` 并把上下文**转发**给内层：
+`ToolCallback.call(String, ToolContext)` 是 default 方法，默认忽略上下文并转调 `call(String)`，
+不重写就会丢上下文，带 `ToolContext` 参数的工具会被框架以"ToolContext is required"拒绝。
+
+## 禁止事项
+
+1. **不要**在 `security/` 放业务服务（`AuthService` 应该在 `service/`）
 2. **不要**在 `service/` 放 Redis/PG 实现（应该在 `security/redis/` 或 `agent/memory/redis/`）
 3. **不要**在 `config/` 放异常处理（应该在 `exception/`）
 4. **不要**在 `domain/` 放 DTO（应该在 `controller/dto/`）
@@ -242,6 +255,8 @@ agent（客服坐席）   : personId 为 null → 可代任意客户操作
 6. **不要**在 `@Tool` 方法里做权限校验（权限在 controller 层校验，tool 层只熔断）
 7. **不要**在日志里打 PII（手机号、证件号、银行卡号）——用 `PiiMasker` 脱敏
 8. **不要**把外部检索内容进 system prompt（应该作为独立 user 消息，`<external_data>` 包裹）
+9. **不要**用 ThreadLocal 传请求级上下文（用户、会话、各类标记）——用 `ToolExecutionContext` + `ToolContext`
+10. **不要**让安全校验在上下文缺失时放行（fail-open）——一律 fail-closed
 
 ## 测试
 

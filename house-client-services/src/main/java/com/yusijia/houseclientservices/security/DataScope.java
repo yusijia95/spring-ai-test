@@ -15,6 +15,9 @@ import java.util.List;
  * 本类是纯函数，不依赖 Spring/DB，便于单测。返回 {@code null} 表示放行，
  * 返回非空字符串表示拒绝原因（调用方决定抛什么异常 / 怎么回话）。
  * <p>
+ * <b>fail-closed</b>：{@code user == null}（上下文缺失、异步下 ThreadLocal 失效等）一律按最保守方式
+ * <b>拒绝</b>，绝不能当作"坐席，不限制"放行——那正是越权最可能的入口。
+ * <p>
  * 为什么不用抛 {@link AccessDeniedException} 直接走 403：这些校验发生在 AI 工具内部，
  * 工具把失败原因回给模型、由模型转述给客户，比直接中断成 500/403 体验更好。
  */
@@ -26,14 +29,17 @@ public final class DataScope {
     /**
      * 校验"这一笔认购的购买主体"是否允许当前用户操作。
      *
-     * @param user      当前登录用户，null 视为未登录（调用方应已拦截）
+     * @param user      当前登录用户；null 表示上下文缺失，按 fail-closed 拒绝
      * @param personIds 购买个人 ID 列表
      * @param orgIds    购买单位 ID 列表
      * @return null 表示允许；否则为拒绝原因
      */
     public static String createViolation(UserContext user, List<Long> personIds, List<Long> orgIds) {
-        if (user == null || !user.isCustomer()) {
-            // 坐席不限制；未登录的拦截在接口层已完成，这里不重复
+        if (user == null) {
+            return "无法确认当前登录身份，为安全起见未执行认购办理，请重新登录后再试";
+        }
+        if (!user.isCustomer()) {
+            // 坐席可代任意客户操作
             return null;
         }
         if (user.personId() == null) {
@@ -56,12 +62,15 @@ public final class DataScope {
     /**
      * 校验"这笔已有认购"是否归当前用户所有（撤销前调用）。
      *
-     * @param user            当前登录用户
+     * @param user            当前登录用户；null 表示上下文缺失，按 fail-closed 拒绝
      * @param buyerPersonIds  该认购单下的个人购买方 ID 集合
      * @return null 表示允许；否则为拒绝原因
      */
     public static String cancelViolation(UserContext user, Collection<Long> buyerPersonIds) {
-        if (user == null || !user.isCustomer()) {
+        if (user == null) {
+            return "无法确认当前登录身份，为安全起见未执行认购撤销，请重新登录后再试";
+        }
+        if (!user.isCustomer()) {
             return null;
         }
         if (user.personId() == null) {
@@ -74,14 +83,29 @@ public final class DataScope {
     }
 
     /**
+     * 查询类工具的前置校验。<b>必须先调它</b>，再调 {@link #queryOwnerFilter(UserContext)}。
+     *
+     * @return null 表示允许；否则为拒绝原因
+     */
+    public static String queryViolation(UserContext user) {
+        if (user == null) {
+            return "无法确认当前登录身份，为安全起见未执行查询，请重新登录后再试";
+        }
+        return null;
+    }
+
+    /**
      * 查询认购单时的归属人过滤。
+     * <p>
+     * 调用前必须先通过 {@link #queryViolation(UserContext)}；这里对 null 直接抛异常而不是返回 null，
+     * 因为"返回 null"等于"不过滤"，一旦漏了前置校验就是越权，宁可炸掉也不能静默放行。
      *
      * @return 需要过滤到的 personId；null 表示不过滤（坐席）
      */
     public static Long queryOwnerFilter(UserContext user) {
-        if (user != null && user.isCustomer()) {
-            return user.personId();
+        if (user == null) {
+            throw new IllegalStateException("查询数据范围缺少用户上下文：必须先调用 DataScope.queryViolation");
         }
-        return null;
+        return user.isCustomer() ? user.personId() : null;
     }
 }

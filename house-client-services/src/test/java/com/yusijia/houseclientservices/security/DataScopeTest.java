@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 数据范围规则（自助客户 vs 坐席）的纯逻辑测试。
@@ -58,9 +59,13 @@ class DataScopeTest {
     }
 
     @Test
-    void nullUserIsNotJudgedHere() {
-        // 未登录在接口层已拦截，这里不为 null 用户兜底放行/拒绝的语义
-        assertThat(DataScope.createViolation(null, List.of(5002L), null)).isNull();
+    void missingUserIsFailClosed() {
+        // 上下文缺失绝不能放行：ThreadLocal 在异步下会静默失效，这里必须守住
+        assertThat(DataScope.createViolation(null, List.of(5001L), null))
+                .contains("无法确认当前登录身份");
+        assertThat(DataScope.cancelViolation(null, Set.of(5001L)))
+                .contains("无法确认当前登录身份");
+        assertThat(DataScope.queryViolation(null)).contains("无法确认当前登录身份");
     }
 
     // ---------- 撤销认购 ----------
@@ -89,8 +94,17 @@ class DataScopeTest {
 
     @Test
     void queryFilterIsSelfForCustomerAndNullForAgent() {
+        assertThat(DataScope.queryViolation(customer)).isNull();
+        assertThat(DataScope.queryViolation(agent)).isNull();
         assertThat(DataScope.queryOwnerFilter(customer)).isEqualTo(5001L);
         assertThat(DataScope.queryOwnerFilter(agent)).isNull();
-        assertThat(DataScope.queryOwnerFilter(null)).isNull();
+    }
+
+    @Test
+    void queryFilterRefusesToGuessWithoutUser() {
+        // 少了前置校验就直接抛，避免"返回 null = 不过滤"的静默越权
+        assertThatThrownBy(() -> DataScope.queryOwnerFilter(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("queryViolation");
     }
 }

@@ -5,6 +5,7 @@ import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
 import com.yusijia.houseclientservices.tool.SessionStateTools;
 import com.yusijia.houseclientservices.tool.SubscriptionTools;
+import com.yusijia.houseclientservices.tool.ToolExecutionContext;
 import com.yusijia.houseclientservices.tool.WebSearchTools;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -142,11 +143,20 @@ public class ToolRegistry {
 
             @Override
             public String call(String toolInput) {
-                String refusal = ExternalContentGuard.blockIfSeen(callback.getToolDefinition().name());
+                return call(toolInput, null);
+            }
+
+            @Override
+            public String call(String toolInput,
+                               org.springframework.ai.chat.model.ToolContext toolContext) {
+                // 必须取本轮上下文判断熔断，不能依赖 ThreadLocal（流式/并行下会换线程）
+                String refusal = ExternalContentGuard.blockIfSeen(
+                        ToolExecutionContext.of(toolContext), callback.getToolDefinition().name());
                 if (refusal != null) {
                     return refusal;
                 }
-                return callback.call(toolInput);
+                // 转发上下文：内层 MethodToolCallback 需要它注入 @Tool 的 ToolContext 参数
+                return callback.call(toolInput, toolContext);
             }
         };
     }
@@ -160,6 +170,13 @@ public class ToolRegistry {
 
             @Override
             public String call(String toolInput) {
+                return call(toolInput, null);
+            }
+
+            @Override
+            public String call(String toolInput,
+                               org.springframework.ai.chat.model.ToolContext toolContext) {
+                ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
                 String name = callback.getToolDefinition().name();
                 String actualInput = toolInput;
                 if ("map_directions".equals(name)) {
@@ -168,16 +185,16 @@ public class ToolRegistry {
                         return guardMessage;
                     }
                     return BaiduMapToolGuard.formatDirectionsOutput(
-                            BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput)));
+                            BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput, toolContext)));
                 }
                 if ("map_search_places".equals(name)) {
-                    actualInput = BaiduMapToolGuard.rewriteSearchPlacesInput(toolInput);
+                    actualInput = BaiduMapToolGuard.rewriteSearchPlacesInput(exec, toolInput);
                     List<String> queries = BaiduMapToolGuard.splitQueries(actualInput);
                     if (queries.size() > 1) {
                         StringBuilder merged = new StringBuilder();
                         for (String query : queries) {
                             String one = BaiduMapToolGuard.withQuery(actualInput, query);
-                            String oneOut = BaiduMapToolGuard.unwrapMcpContent(callback.call(one));
+                            String oneOut = BaiduMapToolGuard.unwrapMcpContent(callback.call(one, toolContext));
                             if (!merged.isEmpty()) {
                                 merged.append('\n');
                             }
@@ -187,14 +204,14 @@ public class ToolRegistry {
                         return merged.toString();
                     }
                     return BaiduMapToolGuard.formatSearchPlacesOutput(
-                            BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput)));
+                            BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput, toolContext)));
                 }
                 if ("map_geocode".equals(name)) {
-                    String rawOutput = BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput));
-                    BaiduMapToolGuard.rememberGeocode(rawOutput);
+                    String rawOutput = BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput, toolContext));
+                    BaiduMapToolGuard.rememberGeocode(exec, rawOutput);
                     return BaiduMapToolGuard.formatGeocodeOutput(rawOutput);
                 }
-                return BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput));
+                return BaiduMapToolGuard.unwrapMcpContent(callback.call(actualInput, toolContext));
             }
         };
     }
