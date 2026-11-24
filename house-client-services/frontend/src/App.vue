@@ -761,7 +761,8 @@ onUnmounted(() => {
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 28px;
+  /* 居中列：正文锁定 40rem（640px），宽屏下两侧留白对称，而不是全挤在左边 */
+  padding: 18px max(28px, calc((100% - 40rem) / 2));
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -789,8 +790,8 @@ onUnmounted(() => {
   background: #f3f4f6;
   color: #1f2937;
   border-bottom-left-radius: 4px;
-  /* 抽屉变宽后正文不跟着撑满：限制行宽（约 45 个中文字/行） */
-  max-width: min(92%, 40rem);
+  /* 列宽已由 .messages 的内边距锁在 40rem，这里只需不超过列宽（约 45 个中文字/行） */
+  max-width: min(100%, 40rem);
 }
 
 /* Markdown rendered content inside assistant bubbles */
@@ -896,7 +897,8 @@ onUnmounted(() => {
 .composer {
   display: flex;
   gap: 10px;
-  padding: 14px 28px 16px;
+  /* 输入区与消息列同宽同基线，宽屏下一起居中 */
+  padding: 14px max(28px, calc((100% - 40rem) / 2)) 16px;
   border-top: 1px solid #f0f2f5;
   flex-shrink: 0;
 }
