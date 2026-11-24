@@ -16,6 +16,57 @@ const sending = ref(false)
 const listError = ref('')
 const chatList = ref(null)
 
+// ---- 登录（P0-1 假登录：所有业务接口都要 Authorization: Bearer token）----
+const token = ref(localStorage.getItem('agent.token') || '')
+const authUser = ref(null)
+const loginName = ref(localStorage.getItem('agent.username') || 'customer1')
+const loginError = ref('')
+
+function authHeaders(extra = {}) {
+  return token.value ? { ...extra, Authorization: `Bearer ${token.value}` } : { ...extra }
+}
+
+async function login() {
+  const name = loginName.value.trim()
+  if (!name) {
+    loginError.value = '请输入用户名'
+    return
+  }
+  loginError.value = ''
+  try {
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: name }),
+    })
+    if (!response.ok) {
+      loginError.value = '用户名不存在（演示账号 customer1 / agent1）'
+      return
+    }
+    const data = await response.json()
+    token.value = data.token
+    authUser.value = data
+    localStorage.setItem('agent.token', data.token)
+    localStorage.setItem('agent.username', name)
+    await loadSubscriptions()
+  } catch (error) {
+    loginError.value = '无法连接后端服务'
+  }
+}
+
+async function logout() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() })
+  } catch (error) {
+    // 登出失败不影响本地清理
+  }
+  token.value = ''
+  authUser.value = null
+  subscriptions.value = []
+  listError.value = ''
+  localStorage.removeItem('agent.token')
+}
+
 // Drawer state
 const drawerOpen = ref(false)
 const drawerRef = ref(null)
@@ -75,8 +126,16 @@ function statusClass(status) {
 }
 
 async function loadSubscriptions() {
+  if (!token.value) {
+    subscriptions.value = []
+    listError.value = ''
+    return
+  }
   try {
-    const response = await fetch('/api/subscriptions')
+    const response = await fetch('/api/subscriptions', { headers: authHeaders() })
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('登录已过期，请重新登录')
+    }
     if (!response.ok) {
       throw new Error('加载认购列表失败')
     }
@@ -133,6 +192,11 @@ async function sendMessage() {
   if (!text || sending.value) {
     return
   }
+  if (!token.value) {
+    messages.value.push({ role: 'assistant', content: '请先在右上角登录（演示账号 customer1 或 agent1）后再咨询。' })
+    input.value = ''
+    return
+  }
   messages.value.push({ role: 'user', content: text })
   input.value = ''
   // 必须是 reactive：直接改裸对象的 content 不会触发 markdownMap 这个 computed 重算，
@@ -146,9 +210,12 @@ async function sendMessage() {
   try {
     const response = await fetch('/api/agent/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ conversationId, message: text }),
     })
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('登录已过期或无权限，请重新登录')
+    }
     if (!response.ok || !response.body) {
       throw new Error('智能体暂时无法回复')
     }
@@ -205,9 +272,24 @@ function handleKeydown(e) {
   }
 }
 
-onMounted(() => {
-  loadSubscriptions()
+onMounted(async () => {
   window.addEventListener('keydown', handleKeydown)
+  // 有本地 token 先校验，避免过期 token 让列表一直报"登录已过期"
+  if (token.value) {
+    try {
+      const response = await fetch('/api/auth/me', { headers: authHeaders() })
+      if (response.ok) {
+        authUser.value = await response.json()
+        await loadSubscriptions()
+        return
+      }
+      token.value = ''
+      localStorage.removeItem('agent.token')
+    } catch (error) {
+      // 后端未就绪：保持未登录态，不阻塞页面
+    }
+  }
+  subscriptions.value = []
 })
 
 onUnmounted(() => {
@@ -222,6 +304,24 @@ onUnmounted(() => {
       <header class="panel-header">
         <h2>已生成认购</h2>
         <div class="header-right">
+          <template v-if="authUser">
+            <span class="user-chip">
+              {{ authUser.displayName || authUser.username }}
+              <em>{{ authUser.role === 'agent' ? '坐席' : '客户' }}</em>
+            </span>
+            <button class="btn-refresh" type="button" @click="logout">退出</button>
+          </template>
+          <div v-else class="login-box">
+            <input
+              v-model="loginName"
+              class="login-input"
+              type="text"
+              placeholder="customer1 / agent1"
+              aria-label="登录用户名"
+              @keydown.enter="login"
+            />
+            <button class="btn-refresh" type="button" @click="login">登录</button>
+          </div>
           <button class="btn-refresh" type="button" @click="loadSubscriptions">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21.5 2v6h-6"/>
@@ -247,7 +347,16 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <div v-if="listError" class="empty-state" role="alert">
+      <div v-if="!authUser" class="empty-state">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        <p>请先登录</p>
+        <span>演示账号：customer1（客户） / agent1（坐席）</span>
+        <p v-if="loginError" class="login-error">{{ loginError }}</p>
+      </div>
+
+      <div v-else-if="listError" class="empty-state" role="alert">
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/>
           <line x1="12" y1="8" x2="12" y2="12"/>
@@ -425,6 +534,57 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ========== 登录态 ========== */
+.login-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.login-input {
+  width: 140px;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: #1a1a2e;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.login-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #eef2ff;
+  color: #3730a3;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.user-chip em {
+  font-style: normal;
+  font-size: 12px;
+  color: #6366f1;
+  background: #e0e7ff;
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.login-error {
+  color: #d44;
+  font-size: 13px;
+  margin: 6px 0 0;
 }
 
 /* ========== Buttons ========== */
