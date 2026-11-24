@@ -669,9 +669,10 @@ onUnmounted(() => {
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.28);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  /* 抽屉不再铺满宽屏，左侧列表需要可辨认：降低压暗与模糊强度 */
+  background: rgba(15, 23, 42, 0.2);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   z-index: 9998;
 }
 
@@ -690,7 +691,8 @@ onUnmounted(() => {
   top: 16px;
   right: 16px;
   bottom: 16px;
-  width: min(460px, calc(100vw - 32px));
+  /* 宽屏抽屉：足够宽以容纳表格/长文，但左侧仍留出列表页可视区域 */
+  width: min(880px, calc(100vw - 24rem));
   background: #fff;
   border-radius: 14px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -715,7 +717,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 22px 14px;
+  padding: 18px 28px 14px;
   border-bottom: 1px solid #f0f2f5;
   flex-shrink: 0;
 }
@@ -759,14 +761,14 @@ onUnmounted(() => {
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: 18px 28px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .bubble {
-  max-width: 82%;
+  max-width: min(80%, 34rem);
   padding: 10px 14px;
   border-radius: 14px;
   line-height: 1.6;
@@ -787,7 +789,8 @@ onUnmounted(() => {
   background: #f3f4f6;
   color: #1f2937;
   border-bottom-left-radius: 4px;
-  max-width: 92%;
+  /* 抽屉变宽后正文不跟着撑满：限制行宽（约 45 个中文字/行） */
+  max-width: min(92%, 40rem);
 }
 
 /* Markdown rendered content inside assistant bubbles */
@@ -893,7 +896,7 @@ onUnmounted(() => {
 .composer {
   display: flex;
   gap: 10px;
-  padding: 14px 18px 16px;
+  padding: 14px 28px 16px;
   border-top: 1px solid #f0f2f5;
   flex-shrink: 0;
 }
@@ -945,6 +948,18 @@ button[type='submit']:disabled {
 }
 
 /* ========== Responsive ========== */
+/* 小桌面 / 笔记本：抽屉收窄，避免挤掉左侧列表 */
+@media (max-width: 1280px) {
+  .drawer {
+    width: min(640px, calc(100vw - 96px));
+  }
+
+  .messages {
+    padding: 16px 22px;
+    gap: 12px;
+  }
+}
+
 @media (max-width: 900px) {
   .layout {
     height: auto;
