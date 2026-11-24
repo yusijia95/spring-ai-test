@@ -112,3 +112,11 @@ Stop-Process -Id <PID>
   已经写坏了就 `git checkout -- <file>` 还原后重做。
 - 端到端造出的认购单会污染 `SubscriptionFlowTest` / `SubscriptionDataScopeTest`（它们依赖 V3 种子态）。
   冒烟后按 `biz_no` 删掉 `subscription` 及 `subscription_person/house/org` 明细，再跑 `clean test`。
+- **页面用 `127.0.0.1:5173` 打开时所有 `/api` 请求会 403 `Invalid CORS request`**：`localhost` 与
+  `127.0.0.1` 是不同 origin，`WebConfig` 的来源白名单必须两个都写（现已默认两个，可用
+  `agent.cors.allowed-origins` 覆盖）。这个 403 由 Spring 的 CORS 校验直接返回，
+  **后端日志里没有任何记录**，只能从浏览器 Network 面板或 CDP 看到，排查时别在服务端日志里白找。
+- 前端登录是 P0-1 假登录：页面右上角输入 `customer1`（客户）/ `agent1`（坐席）登录，
+  token 存 `localStorage['agent.token']`，两个业务请求都要带 `Authorization: Bearer`；
+  未登录时列表页显示"请先登录"、聊天会提示先登录。
+- Redis 没起时 `/api/auth/login` 会 500（`RedisSessionStore.put` 连接被拒），先 `docker start agent-redis`。
