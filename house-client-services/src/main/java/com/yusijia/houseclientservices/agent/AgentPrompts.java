@@ -1,6 +1,10 @@
 package com.yusijia.houseclientservices.agent;
 
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 提示词片段库。
@@ -73,12 +77,35 @@ public final class AgentPrompts {
             - 工具返回"生成失败""撤销失败""未查到"时，如实告知客户，不要假装成功。
             """;
 
+    /** 业务时区：客户与坐席都在国内，固定北京时间，避免服务器时区不同导致"今天"错一天 */
+    private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
+
+    private static final DateTimeFormatter NOW_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm", Locale.CHINA);
+
+    /** 当前时间块（北京时间）。 */
+    public static String nowBlock() {
+        return nowBlock(ZonedDateTime.now(ZONE));
+    }
+
+    /** 便于测试注入固定时刻，与 {@link #nowBlock()} 输出同构。 */
+    static String nowBlock(ZonedDateTime now) {
+        return "## 当前时间\n"
+                + "- 现在是 " + now.format(NOW_FORMAT) + "（北京时间）。\n"
+                + "- 客户问\"今天几号/星期几/现在几点\"这类问题，直接用这一行回答；"
+                + "禁止回答\"没有查看功能\"，也不要让客户自己去看日历。\n"
+                + "- 这个时间只用于回答时间类问题：业务回复里不要主动加日期，"
+                + "也不要据此推算房价、政策、利率这类时效性事实。";
+    }
+
     /**
-     * 按技能集合拼装 system prompt。COMMON 打底，逐个追加各技能的流程提示词。
-     * skills 为 null 或空时只返回 COMMON。
+     * 按技能集合拼装 system prompt。COMMON 打底，追加当前时间块，再逐个追加各技能的流程提示词。
+     * skills 为 null 或空时返回 COMMON + 时间块。
      */
     public static String compose(List<Skill> skills) {
         StringBuilder sb = new StringBuilder(COMMON);
+        // 时间块永远下发：模型没有时钟，不注入就答不了"今天几号/周几"，只会回"没有这个功能"
+        sb.append('\n').append(nowBlock());
         if (skills == null || skills.isEmpty()) {
             return sb.toString();
         }

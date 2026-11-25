@@ -2,6 +2,8 @@ package com.yusijia.houseclientservices.agent;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -41,9 +43,23 @@ class AgentPromptsTest {
     }
 
     @Test
-    void 空技能列表只返回COMMON() {
-        assertEquals(AgentPrompts.COMMON, AgentPrompts.compose(List.of()));
-        assertEquals(AgentPrompts.COMMON, AgentPrompts.compose(null));
+    void 空技能列表返回COMMON加时间块() {
+        String prompt = AgentPrompts.compose(List.of());
+        assertTrue(prompt.startsWith(AgentPrompts.COMMON), "COMMON 必须打底");
+        assertTrue(prompt.contains("## 当前时间"), "时间块必须下发，否则模型答不了'今天几号'");
+
+        assertTrue(AgentPrompts.compose(null).contains("## 当前时间"));
+    }
+
+    @Test
+    void 时间块给出北京时间和星期几() {
+        ZonedDateTime fixed = ZonedDateTime.of(2026, 11, 25, 9, 5, 0, 0, ZoneId.of("Asia/Shanghai"));
+
+        String block = AgentPrompts.nowBlock(fixed);
+
+        assertTrue(block.contains("2026年11月25日 星期三 09:05"), block);
+        assertTrue(block.contains("北京时间"), block);
+        assertTrue(block.contains("禁止回答"), "要明确禁止'没有查看功能'这类推脱");
     }
 
     @Test
