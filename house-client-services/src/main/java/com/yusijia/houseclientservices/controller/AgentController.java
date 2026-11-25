@@ -98,8 +98,9 @@ public class AgentController {
             log.info("agent chat: 请求未带 conversationId，已新建会话 id={} userId={}", conversationId, user.userId());
         }
 
-        // A2：设置本轮请求的 userId 作用域，Redis key 带 userId 前缀（chat:{userId}:{cid}:...）
-        agentChatMemory.addUserScope(String.valueOf(user.userId()));
+        // A2：绑定会话与 userId，Redis key 带 userId 前缀（chat:{userId}:{cid}:...）
+        // 用 conversationId 做键而非全局字段：singleton Bean 并发下全局字段会互相覆盖
+        agentChatMemory.addUserScope(conversationId, String.valueOf(user.userId()));
 
         // 按选中的技能拼装提示词与工具：没被选中的技能不下发，避免上下文和工具槽位被稀释
         List<Skill> skills = skillSelector.select(conversationId, request.message());

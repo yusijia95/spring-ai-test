@@ -56,11 +56,16 @@ public class RedisChatMemory implements AgentChatMemory {
     private volatile long degradedUntil;
 
     /**
-     * 当前请求的 userId（A2：Redis key 命名空间）。
-     * volatile 保证 controller 线程写入后，advisor 线程（不同线程）能看到正确值。
-     * 同一 JVM 内同一时刻只有一个请求在处理（单线程模型），无并发冲突。
+     * 会话级 userId 映射（A2：Redis key 命名空间）。
+     * <p>
+     * key = conversationId，value = userId。
+     * 不能用单实例 volatile 字段：singleton Bean 被所有请求共享，
+     * 两个用户并发请求时后写的 userId 会覆盖先写的，导致会话 A 的消息写进用户 B 的命名空间。
+     * ConcurrentHashMap 保证每个 conversationId 独立，互不干扰。
+     * 不主动清理：conversationId 是雪花 id（天然唯一），条目靠进程重启回收；
+     * 每个条目两个 String 引用，内存开销可忽略。
      */
-    private volatile String userScope;
+    private final Map<String, String> userScopes = new ConcurrentHashMap<>();
 
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
                            ChatDigestStore digestStore, ChatMemoryCompressor compressor,
@@ -168,8 +173,10 @@ public class RedisChatMemory implements AgentChatMemory {
     }
 
     @Override
-    public void addUserScope(String userId) {
-        this.userScope = userId;
+    public void addUserScope(String conversationId, String userId) {
+        if (conversationId != null && userId != null && !userId.isBlank()) {
+            userScopes.put(conversationId, userId);
+        }
     }
 
     /**
@@ -307,7 +314,7 @@ public class RedisChatMemory implements AgentChatMemory {
      * userId 缺失时退化为 {@code chat:{cid}}（兼容测试等未设置作用域的场景）。
      */
     private String keyPrefix(String conversationId) {
-        String uid = userScope;
+        String uid = userScopes.get(conversationId);
         if (uid == null || uid.isBlank()) {
             return "chat:{" + conversationId + "}";
         }

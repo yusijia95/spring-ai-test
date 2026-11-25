@@ -24,8 +24,9 @@ class RedisChatMemoryTest {
     private RedisChatMemory memory(int maxMessages, int maxChars, int keepRecent) {
         RedisChatMemory m = new RedisChatMemory(redis, new ChatMessageCodec(), digestStore, compressor,
                 new ChatMemoryLimits(maxMessages, maxChars, keepRecent, 3600, 5000));
-        // A2：设置 userId 作用域，key 格式变为 chat:{u1}:{cid}:...
-        m.addUserScope("u1");
+        // A2：绑定会话与 userId，key 格式变为 chat:{u1}:{cid}:...
+        // 所有测试用例都用 conversationId="c1"，在这里统一绑定
+        m.addUserScope("c1", "u1");
         return m;
     }
 

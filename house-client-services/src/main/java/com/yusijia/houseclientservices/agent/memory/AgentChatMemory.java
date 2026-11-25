@@ -21,10 +21,14 @@ public interface AgentChatMemory extends ChatMemory {
     String digest(String conversationId);
 
     /**
-     * 设置本轮请求的 userId，用于 Redis key 命名空间。
-     * 在请求开始时（controller 层）调用，advisor 线程执行时读到该值。
+     * 绑定会话与 userId，用于 Redis key 命名空间。
+     * 在请求开始时（controller 层）调用，advisor 线程执行时按 conversationId 查到 userId。
+     * <p>
+     * 用 conversationId 做键而不是全局字段：singleton Bean 被所有请求共享，
+     * 全局字段在并发下会互相覆盖（用户 A 的消息写进用户 B 的命名空间）。
      *
-     * @param userId 当前用户 ID
+     * @param conversationId 会话 ID
+     * @param userId         当前用户 ID
      */
-    void addUserScope(String userId);
+    void addUserScope(String conversationId, String userId);
 }
