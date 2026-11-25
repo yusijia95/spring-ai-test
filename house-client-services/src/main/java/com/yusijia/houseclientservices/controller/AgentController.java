@@ -109,7 +109,7 @@ public class AgentController {
         // 顺序：硬约束 + 技能流程 → 会话事实 → 更早对话摘要。
         // 状态与摘要都在技能之后：事实优先于流程说明里的默认行为。
         // 检索结果不进这里：它是外部不可信文本，进 system 就等于拿到最高指令位。
-        String systemPrompt = AgentPrompts.compose(skills);
+        String systemPrompt = AgentPrompts.compose(skills, user);
         Map<String, String> sessionState = sessionStateTools.snapshot(conversationId);
         String sessionBlock = AgentPrompts.sessionBlock(sessionState);
         if (!sessionBlock.isEmpty()) {

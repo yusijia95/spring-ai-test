@@ -6,6 +6,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 
+import com.yusijia.houseclientservices.security.UserContext;
+
 /**
  * 提示词片段库。
  * <p>
@@ -99,13 +101,51 @@ public final class AgentPrompts {
     }
 
     /**
-     * 按技能集合拼装 system prompt。COMMON 打底，追加当前时间块，再逐个追加各技能的流程提示词。
-     * skills 为 null 或空时返回 COMMON + 时间块。
+     * 当前用户块。
+     * <p>
+     * 模型没有"我是谁"的感知：不注入就分不清对面是自助客户还是客服坐席，被问到
+     * "能不能帮我朋友办"时只能按训练语料猜一个答案。这里只给身份与代办范围，
+     * <b>不给权限点名称</b>——权限点是内部判定实现，讲给模型听只会诱使它复述甚至编造。
+     */
+    public static String userBlock(UserContext user) {
+        if (user == null) {
+            return "";
+        }
+        String who = (user.displayName() == null || user.displayName().isBlank())
+                ? user.username()
+                : user.displayName();
+        boolean agent = user.isAgent();
+        StringBuilder sb = new StringBuilder("## 当前用户\n");
+        sb.append("- 对话对象：").append(who)
+                .append("（").append(agent ? "客服坐席" : "自助客户").append("）\n");
+        if (agent) {
+            sb.append("- 坐席可以代客户办理业务，但只能操作自己有权看到的客户与房屋；")
+                    .append("查不到就如实说没有权限，不要说成系统故障，也不要承诺去线下协调。\n");
+        } else {
+            sb.append("- 自助客户只能办理本人名下的业务；客户要求代办他人时，如实说明只能本人办理，")
+                    .append("并引导本人来办或联系坐席。\n");
+        }
+        sb.append("- 以上只用于判断\"能不能办、给谁办\"：不要主动播报角色设定，")
+                .append("也不要据此推断折扣、额度、政策等其它权限。");
+        return sb.toString();
+    }
+
+    /**
+     * 按技能集合拼装 system prompt。COMMON 打底，追加当前时间块、当前用户块，再逐个追加各技能的流程提示词。
+     * skills 为 null 或空时返回 COMMON + 时间块（无用户时不含用户块）。
      */
     public static String compose(List<Skill> skills) {
+        return compose(skills, null);
+    }
+
+    public static String compose(List<Skill> skills, UserContext user) {
         StringBuilder sb = new StringBuilder(COMMON);
         // 时间块永远下发：模型没有时钟，不注入就答不了"今天几号/周几"，只会回"没有这个功能"
         sb.append('\n').append(nowBlock());
+        String userBlock = userBlock(user);
+        if (!userBlock.isEmpty()) {
+            sb.append('\n').append(userBlock);
+        }
         if (skills == null || skills.isEmpty()) {
             return sb.toString();
         }

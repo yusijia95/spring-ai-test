@@ -2,11 +2,14 @@ package com.yusijia.houseclientservices.agent;
 
 import org.junit.jupiter.api.Test;
 
+import com.yusijia.houseclientservices.security.UserContext;
+
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -60,6 +63,41 @@ class AgentPromptsTest {
         assertTrue(block.contains("2026年11月25日 星期三 09:05"), block);
         assertTrue(block.contains("北京时间"), block);
         assertTrue(block.contains("禁止回答"), "要明确禁止'没有查看功能'这类推脱");
+    }
+
+    @Test
+    void 用户块区分客户与坐席的代办范围() {
+        UserContext customer = new UserContext(1L, "customer1", UserContext.ROLE_CUSTOMER, "演示客户1", 5001L);
+        UserContext agent = new UserContext(2L, "agent1", UserContext.ROLE_AGENT, "演示坐席1", null);
+
+        String customerBlock = AgentPrompts.userBlock(customer);
+        assertTrue(customerBlock.contains("演示客户1"), customerBlock);
+        assertTrue(customerBlock.contains("自助客户"), customerBlock);
+        assertTrue(customerBlock.contains("只能办理本人名下"), "客户要被告知不能代办他人");
+
+        String agentBlock = AgentPrompts.userBlock(agent);
+        assertTrue(agentBlock.contains("客服坐席"), agentBlock);
+        assertTrue(agentBlock.contains("代客户办理"), agentBlock);
+
+        assertFalse(customerBlock.contains("agent"), "不能把内部角色码写进提示词");
+        assertEquals("", AgentPrompts.userBlock(null));
+    }
+
+    @Test
+    void 提示词按登录用户拼装且不外泄权限点() {
+        UserContext customer = new UserContext(1L, "customer1", UserContext.ROLE_CUSTOMER, "演示客户1", 5001L);
+
+        String prompt = AgentPrompts.compose(List.of(), customer);
+
+        assertTrue(prompt.startsWith(AgentPrompts.COMMON), "COMMON 必须打底");
+        assertTrue(prompt.contains("## 当前时间"), prompt);
+        assertTrue(prompt.contains("## 当前用户"), prompt);
+        assertTrue(prompt.contains("演示客户1"), prompt);
+        assertFalse(prompt.contains("subscription:read"), "权限点名称是内部实现，不能进提示词");
+
+        String anonymous = AgentPrompts.compose(List.of());
+        assertTrue(anonymous.contains("## 当前时间"));
+        assertFalse(anonymous.contains("## 当前用户"));
     }
 
     @Test
