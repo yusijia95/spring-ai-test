@@ -98,9 +98,10 @@ public class AgentController {
             log.info("agent chat: 请求未带 conversationId，已新建会话 id={} userId={}", conversationId, user.userId());
         }
 
-        // A2：绑定会话与 userId，Redis key 带 userId 前缀（chat:{userId}:{cid}:...）
-        // 用 conversationId 做键而非全局字段：singleton Bean 并发下全局字段会互相覆盖
-        agentChatMemory.addUserScope(conversationId, String.valueOf(user.userId()));
+        // A2：把 userId 编码进 conversationId（复合键 userId:cid），
+        // 随 ChatMemory.CONVERSATION_ID 参数传入 advisor，Redis key 自动带 userId 命名空间。
+        // 不用实例字段（volatile / ConcurrentHashMap）：singleton Bean 并发下要么互相覆盖、要么无 TTL OOM。
+        String scopedConversationId = user.userId() + ":" + conversationId;
 
         // 按选中的技能拼装提示词与工具：没被选中的技能不下发，避免上下文和工具槽位被稀释
         List<Skill> skills = skillSelector.select(conversationId, request.message());
@@ -164,7 +165,7 @@ public class AgentController {
         // 不需要"漏答补齐"和"认购防幻觉"这类对全文的校验，逐字返回体验更好。
         if (toolCallbacks.isEmpty()) {
             Flux<String> flux = withUserMessages(houseServiceChatClient.prompt(), systemPrompt, retrieval, request.message())
-                    .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
+                    .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, scopedConversationId))
                     .toolContext(toolContext)
                     .stream()
                     .content()
@@ -173,7 +174,7 @@ public class AgentController {
             return attachSummary(flux, user, conversationId, skills, toolNames, hasRetrieval, exec, startTime);
         }
         String answer = answerWithTools(systemPrompt, retrieval, request.message(), toolCallbacks,
-                conversationId, exec);
+                scopedConversationId, exec);
         logSummary(conversationId, skills, toolNames, hasRetrieval, answer, startTime);
         // P0-5：同步写审计（有工具路径拿得到完整工具调用记录），写失败不影响已生成的回答
         agentAuditService.record(user, conversationId, skillNames(skills), exec, chatModel,

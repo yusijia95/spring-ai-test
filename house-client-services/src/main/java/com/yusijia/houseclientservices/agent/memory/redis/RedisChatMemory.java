@@ -55,18 +55,6 @@ public class RedisChatMemory implements AgentChatMemory {
 
     private volatile long degradedUntil;
 
-    /**
-     * 会话级 userId 映射（A2：Redis key 命名空间）。
-     * <p>
-     * key = conversationId，value = userId。
-     * 不能用单实例 volatile 字段：singleton Bean 被所有请求共享，
-     * 两个用户并发请求时后写的 userId 会覆盖先写的，导致会话 A 的消息写进用户 B 的命名空间。
-     * ConcurrentHashMap 保证每个 conversationId 独立，互不干扰。
-     * 不主动清理：conversationId 是雪花 id（天然唯一），条目靠进程重启回收；
-     * 每个条目两个 String 引用，内存开销可忽略。
-     */
-    private final Map<String, String> userScopes = new ConcurrentHashMap<>();
-
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
                            ChatDigestStore digestStore, ChatMemoryCompressor compressor,
                            ChatMemoryLimits limits) {
@@ -170,13 +158,6 @@ public class RedisChatMemory implements AgentChatMemory {
             }
         }
         return fromStore;
-    }
-
-    @Override
-    public void addUserScope(String conversationId, String userId) {
-        if (conversationId != null && userId != null && !userId.isBlank()) {
-            userScopes.put(conversationId, userId);
-        }
     }
 
     /**
@@ -307,18 +288,19 @@ public class RedisChatMemory implements AgentChatMemory {
     }
 
     /**
-     * 构建带 userId 命名空间的 Redis key 前缀（A2）。
+     * 构建 Redis key 前缀。
      * <p>
-     * 格式：{@code chat:{userId}:{cid}:...}，其中 {@code {cid}} 是哈希标签，
-     * 保证同一会话的所有 key 落在同一 Cluster slot。
-     * userId 缺失时退化为 {@code chat:{cid}}（兼容测试等未设置作用域的场景）。
+     * conversationId 此时是 controller 层传入的复合键 {@code userId:cid}（A2），
+     * 直接作为哈希标签：{@code chat:{userId:cid}:msg}，同一会话的所有 key
+     * （msg/digest/lock）落在同一 Cluster slot。
+     * 测试等未带 userId 的场景传纯 cid，格式退化为 {@code chat:{cid}:msg}。
+     * <p>
+     * 不用实例字段存 userId：singleton Bean 被所有请求共享，任何实例级状态
+     * （volatile 字段 / ConcurrentHashMap）要么并发覆盖、要么无 TTL 导致 OOM。
+     * 把 userId 编码进 conversationId 本身，零额外状态，天然并发安全。
      */
     private String keyPrefix(String conversationId) {
-        String uid = userScopes.get(conversationId);
-        if (uid == null || uid.isBlank()) {
-            return "chat:{" + conversationId + "}";
-        }
-        return "chat:{" + uid + ":" + conversationId + "}";
+        return "chat:{" + conversationId + "}";
     }
 
     private String messageKey(String conversationId) {
