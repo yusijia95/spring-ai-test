@@ -26,6 +26,14 @@ public final class PermissionPoints {
     public static final String DATA_HOUSE_SEARCH = "data:house:search";
     /** 查个人客户（含证件号，敏感；两种角色都有，坐席办业务需要）。 */
     public static final String DATA_PERSON_SEARCH = "data:person:search";
+    /**
+     * 查看个人客户手机号明文（仅坐席）。
+     * <p>
+     * 手机号是直接触达手段，比证件号更"可滥用"：拿到即可骚扰/撞库。默认一律掩码，
+     * 只有明确持有本权限点时才返回原值——接口与 AI 工具两侧都必须显式判定，
+     * 不能靠"调用的地方记得掩码"。
+     */
+    public static final String DATA_PERSON_PHONE_READ = "data:person:phone:read";
     /** 查单位客户。 */
     public static final String DATA_ORG_SEARCH = "data:org:search";
 

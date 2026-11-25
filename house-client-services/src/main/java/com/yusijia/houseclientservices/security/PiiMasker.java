@@ -1,4 +1,4 @@
-package com.yusijia.houseclientservices.agent;
+package com.yusijia.houseclientservices.security;
 
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -17,7 +17,10 @@ import java.util.regex.Pattern;
  * 房号（{@code 1幢101}）、金额、日期都不会被改成掩码。
  * <p>
  * 姓名、地址这类无法用正则判定的 PII 不在这里处理：调用方要么不打印，要么只打印结构化字段
- * （如客户 ID、房号），不打印自由文本。见 {@link MaskingLoggingAdvisor}。
+ * （如客户 ID、房号），不打印自由文本。日志侧的具体调用见 {@code MaskingLoggingAdvisor}。
+ * <p>
+ * 放在 {@code security} 而不是 {@code agent}：日志脱敏、存储脱敏、接口返回脱敏是同一套规则，
+ * 调用方横跨 {@code agent}/{@code tool}/{@code service}，放在任一侧都会造成越层依赖。
  */
 public final class PiiMasker {
 
@@ -60,6 +63,19 @@ public final class PiiMasker {
         masked = replace(masked, MOBILE_11, m -> m.group(1) + "****" + m.group(3));
         masked = replace(masked, LONG_NUMBER, m -> m.group(1) + "*".repeat(m.group(2).length()) + m.group(3));
         return replace(masked, LONG_NUMBER_15, m -> m.group(1) + "*".repeat(7) + m.group(3));
+    }
+
+    /**
+     * 遮罩单个手机号（结构化字段用，不做全文扫描）。
+     * <p>
+     * 只处理 11 位手机号；座机、分机、非手机号格式原样返回——宁可漏也不要误伤，
+     * 这类字段的正确做法是让调用方决定是否允许明文。
+     *
+     * @param phone 手机号，null 原样返回
+     * @return {@code 138****0001} 形态的掩码
+     */
+    public static String maskPhone(String phone) {
+        return mask(phone);
     }
 
     /**

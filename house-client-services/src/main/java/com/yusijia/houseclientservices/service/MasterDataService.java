@@ -17,6 +17,7 @@ import com.yusijia.houseclientservices.mapper.HouseRoomMapper;
 import com.yusijia.houseclientservices.mapper.OrgUnitMapper;
 import com.yusijia.houseclientservices.mapper.PersonContactMapper;
 import com.yusijia.houseclientservices.mapper.PersonMapper;
+import com.yusijia.houseclientservices.security.PiiMasker;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -204,7 +205,13 @@ public class MasterDataService {
         return rooms.stream().map(getter).filter(Objects::nonNull).max(BigDecimal::compareTo).orElse(null);
     }
 
-    public List<PersonView> searchPersons(String keyword) {
+    /**
+     * 按关键字查询个人客户。
+     *
+     * @param phoneVisible 是否返回手机号明文；由调用方按 {@code data:person:phone:read}
+     *                     权限点显式传入，默认应传 {@code false}
+     */
+    public List<PersonView> searchPersons(String keyword, boolean phoneVisible) {
         String kw = trim(keyword);
         List<Person> persons = personMapper.selectList(new LambdaQueryWrapper<Person>()
                 .eq(Person::getDeletedFlag, NOT_DELETED)
@@ -234,7 +241,7 @@ public class MasterDataService {
                     String.valueOf(person.getId()),
                     person.getFullName(),
                     maskIdNo(person.getIdNo()),
-                    phoneByPerson.get(person.getId())));
+                    phoneOf(phoneByPerson.get(person.getId()), phoneVisible)));
         }
         return views;
     }
@@ -300,8 +307,10 @@ public class MasterDataService {
 
     /**
      * 按 ID 列表批量查询个人客户（供认购预览用）。
+     *
+     * @param phoneVisible 是否返回手机号明文；由调用方按 {@code data:person:phone:read} 权限点决定
      */
-    public List<PersonView> searchPersonsByIds(List<Long> ids) {
+    public List<PersonView> searchPersonsByIds(List<Long> ids, boolean phoneVisible) {
         if (ids == null || ids.isEmpty()) {
             return List.of();
         }
@@ -324,7 +333,7 @@ public class MasterDataService {
                     String.valueOf(person.getId()),
                     person.getFullName(),
                     maskIdNo(person.getIdNo()),
-                    phoneByPerson.get(person.getId())));
+                    phoneOf(phoneByPerson.get(person.getId()), phoneVisible)));
         }
         return views;
     }
@@ -365,6 +374,11 @@ public class MasterDataService {
             return idNo;
         }
         return idNo.substring(0, 4) + "**********" + idNo.substring(idNo.length() - 4);
+    }
+
+    /** 手机号按权限决定明文或掩码；掩码规则与日志脱敏共用 {@link PiiMasker}，避免两套口径。 */
+    private String phoneOf(String phone, boolean phoneVisible) {
+        return phoneVisible ? phone : PiiMasker.maskPhone(phone);
     }
 
     private String trim(String value) {

@@ -5,7 +5,9 @@ import com.yusijia.houseclientservices.domain.view.OrgView;
 import com.yusijia.houseclientservices.domain.view.PersonView;
 import com.yusijia.houseclientservices.domain.view.SubscriptionView;
 import com.yusijia.houseclientservices.exception.BizException;
+import com.yusijia.houseclientservices.security.Authorization;
 import com.yusijia.houseclientservices.security.DataScope;
+import com.yusijia.houseclientservices.security.PermissionPoints;
 import com.yusijia.houseclientservices.security.UserContext;
 import com.yusijia.houseclientservices.service.MasterDataService;
 import com.yusijia.houseclientservices.service.SubscriptionService;
@@ -66,14 +68,18 @@ public class SubscriptionTools {
 
     @Tool(description = "按姓名或证件号码查询个人客户。生成认购前必须先调用本工具获取真实客户ID。")
     public String searchPerson(
-            @ToolParam(description = "客户姓名，或完整证件号码；只传其中一项，不要拼接") String keyword) {
+            @ToolParam(description = "客户姓名，或完整证件号码；只传其中一项，不要拼接") String keyword,
+            ToolContext toolContext) {
         if (!StringUtils.hasText(keyword)) {
             return "请提供客户姓名或证件号码。";
         }
-        List<PersonView> persons = masterDataService.searchPersons(keyword);
+        ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
+        UserContext user = exec == null ? null : exec.user();
+        boolean phoneVisible = Authorization.hasPermission(user, PermissionPoints.DATA_PERSON_PHONE_READ);
+        List<PersonView> persons = masterDataService.searchPersons(keyword, phoneVisible);
         if (persons.isEmpty()) {
             // 模型常把"姓名 + 证件号码"一起传进来，拆开逐个再试一次
-            persons = searchByTokens(keyword);
+            persons = searchByTokens(keyword, phoneVisible);
         }
         if (persons.isEmpty()) {
             return "未找到匹配的个人客户。该客户可能尚未建档，请让客户确认姓名和证件号码。";
@@ -87,13 +93,13 @@ public class SubscriptionTools {
     }
 
     /** 把"张三 330106199001011234"这类拼接输入拆成单个关键字，逐个查询并按 ID 去重合并 */
-    private List<PersonView> searchByTokens(String keyword) {
+    private List<PersonView> searchByTokens(String keyword, boolean phoneVisible) {
         Map<String, PersonView> merged = new LinkedHashMap<>();
         for (String token : keyword.split("[\\s,，;；/、]+")) {
             if (!StringUtils.hasText(token)) {
                 continue;
             }
-            for (PersonView person : masterDataService.searchPersons(token)) {
+            for (PersonView person : masterDataService.searchPersons(token, phoneVisible)) {
                 merged.putIfAbsent(person.id(), person);
             }
         }
@@ -148,8 +154,9 @@ public class SubscriptionTools {
                     return "预览失败：请至少选择一个购买主体。";
                 }
                 // 查询房屋坐落和购买方姓名用于预览
+                boolean phoneVisible = Authorization.hasPermission(user, PermissionPoints.DATA_PERSON_PHONE_READ);
                 List<HouseView> houses = masterDataService.searchHousesByIds(rooms);
-                List<PersonView> people = persons.isEmpty() ? List.of() : masterDataService.searchPersonsByIds(persons);
+                List<PersonView> people = persons.isEmpty() ? List.of() : masterDataService.searchPersonsByIds(persons, phoneVisible);
                 List<OrgView> units = orgs.isEmpty() ? List.of() : masterDataService.searchOrgsByIds(orgs);
                 StringBuilder preview = new StringBuilder("【认购预览】请确认以下信息：\n");
                 for (HouseView h : houses) {

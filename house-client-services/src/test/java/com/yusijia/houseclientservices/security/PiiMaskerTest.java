@@ -1,4 +1,4 @@
-package com.yusijia.houseclientservices.agent;
+package com.yusijia.houseclientservices.security;
 
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +24,15 @@ class PiiMaskerTest {
     @Test
     void 手机号_中间四位打码() {
         assertEquals("联系电话 138****5678 已记录", PiiMasker.mask("联系电话 13812345678 已记录"));
+    }
+
+    @Test
+    void 结构化手机号字段按同一口径掩码() {
+        // 接口与工具返回的是裸手机号，不是整段文本；掩码口径必须和日志侧一致
+        assertEquals("138****0001", PiiMasker.maskPhone("13800000001"));
+        assertNull(PiiMasker.maskPhone(null));
+        // 非手机号格式原样返回：宁可漏也不误伤，由调用方决定是否允许明文
+        assertEquals("0571-88886666", PiiMasker.maskPhone("0571-88886666"));
     }
 
     @Test

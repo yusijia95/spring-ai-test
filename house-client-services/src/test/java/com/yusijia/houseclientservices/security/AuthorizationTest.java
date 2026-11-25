@@ -32,12 +32,19 @@ class AuthorizationTest {
     }
 
     @Test
+    void customer_cannotReadPersonPhonePlaintext() {
+        // 手机号明文只给坐席：客户即使能搜到本人档案，也只看得到掩码
+        assertThat(Authorization.hasPermission(customer, PermissionPoints.DATA_PERSON_PHONE_READ)).isFalse();
+    }
+
+    @Test
     void agent_hasAllPermissions() {
         for (String p : new String[]{
                 PermissionPoints.CHAT_USE,
                 PermissionPoints.CHAT_CONVERSATION,
                 PermissionPoints.DATA_HOUSE_SEARCH,
                 PermissionPoints.DATA_PERSON_SEARCH,
+                PermissionPoints.DATA_PERSON_PHONE_READ,
                 PermissionPoints.DATA_ORG_SEARCH,
                 PermissionPoints.SUBSCRIPTION_READ,
                 PermissionPoints.SUBSCRIPTION_CREATE,
