@@ -22,8 +22,11 @@ class RedisChatMemoryTest {
     private final FakeCompressor compressor = new FakeCompressor();
 
     private RedisChatMemory memory(int maxMessages, int maxChars, int keepRecent) {
-        return new RedisChatMemory(redis, new ChatMessageCodec(), digestStore, compressor,
+        RedisChatMemory m = new RedisChatMemory(redis, new ChatMessageCodec(), digestStore, compressor,
                 new ChatMemoryLimits(maxMessages, maxChars, keepRecent, 3600, 5000));
+        // A2：设置 userId 作用域，key 格式变为 chat:{u1}:{cid}:...
+        m.addUserScope("u1");
+        return m;
     }
 
     @Test
@@ -47,7 +50,7 @@ class RedisChatMemoryTest {
         memory.add("c1", new UserMessage("三".repeat(40)));
 
         assertEquals("客户在看 A 楼盘 101 室", digestStore.latest("c1"));
-        assertEquals("客户在看 A 楼盘 101 室", redis.strings.get("chat:{c1}:digest"));
+        assertEquals("客户在看 A 楼盘 101 室", redis.strings.get("chat:{u1:c1}:digest"));
         assertEquals(2, memory.get("c1").size());
         assertEquals("二".repeat(40), memory.get("c1").get(0).getText());
     }
@@ -68,7 +71,7 @@ class RedisChatMemoryTest {
     void 锁被其他实例占用时跳过压缩() {
         RedisChatMemory memory = memory(40, 60, 2);
         compressor.reply = () -> "不该被写下";
-        redis.strings.put("chat:{c1}:lock:digest", "1");
+        redis.strings.put("chat:{u1:c1}:lock:digest", "1");
 
         memory.add("c1", new UserMessage("一".repeat(40)));
         memory.add("c1", new UserMessage("二".repeat(40)));
@@ -97,7 +100,7 @@ class RedisChatMemoryTest {
         digestStore.save("c1", "客户预算 300 万");
 
         assertEquals("客户预算 300 万", memory.digest("c1"));
-        assertEquals("客户预算 300 万", redis.strings.get("chat:{c1}:digest"));
+        assertEquals("客户预算 300 万", redis.strings.get("chat:{u1:c1}:digest"));
     }
 
     @Test

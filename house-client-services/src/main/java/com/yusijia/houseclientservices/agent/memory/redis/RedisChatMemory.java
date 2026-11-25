@@ -30,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>Redis 不可用时自动降级为进程内窗口，聊天不会 500。</li>
  * </ul>
  * Key 统一带 {@code {cid}} 哈希标签：将来换 Redis Cluster 时同一会话的 key 落在同一 slot。
+ * A2 起 key 带 userId 命名空间：{@code chat:{userId}:{cid}:...}，按用户清理和审计更方便。
  */
 public class RedisChatMemory implements AgentChatMemory {
 
@@ -49,6 +50,13 @@ public class RedisChatMemory implements AgentChatMemory {
     private final Map<String, Deque<Message>> localWindow = new ConcurrentHashMap<>();
 
     private volatile long degradedUntil;
+
+    /**
+     * 当前请求的 userId（A2：Redis key 命名空间）。
+     * volatile 保证 controller 线程写入后，advisor 线程（不同线程）能看到正确值。
+     * 同一 JVM 内同一时刻只有一个请求在处理（单线程模型），无并发冲突。
+     */
+    private volatile String userScope;
 
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
                            ChatDigestStore digestStore, ChatMemoryCompressor compressor,
@@ -155,6 +163,11 @@ public class RedisChatMemory implements AgentChatMemory {
         return fromStore;
     }
 
+    @Override
+    public void addUserScope(String userId) {
+        this.userScope = userId;
+    }
+
     /**
      * 硬上限（条数）先截，再由字符预算决定要不要压缩。
      * <p>
@@ -257,15 +270,30 @@ public class RedisChatMemory implements AgentChatMemory {
                 DEGRADE_MILLIS / 1000, Objects.toString(e.getMessage(), e.getClass().getSimpleName()));
     }
 
-    private static String messageKey(String conversationId) {
-        return "chat:{" + conversationId + "}:msg";
+    /**
+     * 构建带 userId 命名空间的 Redis key 前缀（A2）。
+     * <p>
+     * 格式：{@code chat:{userId}:{cid}:...}，其中 {@code {cid}} 是哈希标签，
+     * 保证同一会话的所有 key 落在同一 Cluster slot。
+     * userId 缺失时退化为 {@code chat:{cid}}（兼容测试等未设置作用域的场景）。
+     */
+    private String keyPrefix(String conversationId) {
+        String uid = userScope;
+        if (uid == null || uid.isBlank()) {
+            return "chat:{" + conversationId + "}";
+        }
+        return "chat:{" + uid + ":" + conversationId + "}";
     }
 
-    private static String digestKey(String conversationId) {
-        return "chat:{" + conversationId + "}:digest";
+    private String messageKey(String conversationId) {
+        return keyPrefix(conversationId) + ":msg";
     }
 
-    private static String lockKey(String conversationId) {
-        return "chat:{" + conversationId + "}:lock:digest";
+    private String digestKey(String conversationId) {
+        return keyPrefix(conversationId) + ":digest";
+    }
+
+    private String lockKey(String conversationId) {
+        return keyPrefix(conversationId) + ":lock:digest";
     }
 }

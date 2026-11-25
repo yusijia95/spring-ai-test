@@ -98,6 +98,9 @@ public class AgentController {
             log.info("agent chat: 请求未带 conversationId，已新建会话 id={} userId={}", conversationId, user.userId());
         }
 
+        // A2：设置本轮请求的 userId 作用域，Redis key 带 userId 前缀（chat:{userId}:{cid}:...）
+        agentChatMemory.addUserScope(String.valueOf(user.userId()));
+
         // 按选中的技能拼装提示词与工具：没被选中的技能不下发，避免上下文和工具槽位被稀释
         List<Skill> skills = skillSelector.select(conversationId, request.message());
 
@@ -118,7 +121,7 @@ public class AgentController {
         // 状态与摘要都在技能之后：事实优先于流程说明里的默认行为。
         // 检索结果不进这里：它是外部不可信文本，进 system 就等于拿到最高指令位。
         String systemPrompt = AgentPrompts.compose(skills, user);
-        Map<String, String> sessionState = sessionStateTools.snapshot(conversationId);
+        Map<String, String> sessionState = sessionStateTools.snapshot(String.valueOf(user.userId()), conversationId);
         String sessionBlock = AgentPrompts.sessionBlock(sessionState);
         if (!sessionBlock.isEmpty()) {
             systemPrompt = systemPrompt + "\n" + sessionBlock;

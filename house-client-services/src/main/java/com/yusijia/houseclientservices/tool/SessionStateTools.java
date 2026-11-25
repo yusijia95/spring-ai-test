@@ -49,6 +49,7 @@ public class SessionStateTools {
             ToolContext toolContext) {
         ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
         String conversationId = exec == null ? null : exec.conversationId();
+        String userId = exec == null || exec.user() == null ? null : String.valueOf(exec.user().userId());
         if (!StringUtils.hasText(conversationId)) {
             return "未记录：当前没有绑定会话。";
         }
@@ -64,17 +65,22 @@ public class SessionStateTools {
             fact = fact.substring(0, 200);
         }
         try {
-            repository.put(conversationId, field, fact);
+            repository.put(userId, conversationId, field, fact);
         } catch (RuntimeException e) {
             log.warn("写入会话状态失败: field={}, error={}", field, e.getMessage());
             return "未记录：状态存储暂不可用。";
         }
-        log.info("会话状态已更新: conversationId={}, {}={}", conversationId, field, fact);
+        log.info("会话状态已更新: userId={}, conversationId={}, {}={}", userId, conversationId, field, fact);
         return "已记录 " + field + "：" + fact;
     }
 
-    /** 供 Controller 在拼接 system prompt 时读取 */
-    public Map<String, String> snapshot(String conversationId) {
-        return repository.get(conversationId);
+    /**
+     * 供 Controller 在拼接 system prompt 时读取。
+     *
+     * @param userId         当前用户 ID（A2：Redis key 命名空间）
+     * @param conversationId 会话 ID
+     */
+    public Map<String, String> snapshot(String userId, String conversationId) {
+        return repository.get(userId, conversationId);
     }
 }

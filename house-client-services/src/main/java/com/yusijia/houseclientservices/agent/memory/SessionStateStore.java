@@ -25,10 +25,14 @@ public interface SessionStateStore {
     Set<String> ALLOWED_KEYS = Set.of(
             "currentProject", "currentHouse", "pendingSubscription", "budget", "districtPref");
 
-    /** @return 当前会话的全部状态；没有时返回空 Map，不返回 null */
-    Map<String, String> get(String conversationId);
+    /**
+     * @param userId         当前用户 ID（A2：Redis key 命名空间）
+     * @param conversationId 会话 ID
+     * @return 当前会话的全部状态；没有时返回空 Map，不返回 null
+     */
+    Map<String, String> get(String userId, String conversationId);
 
-    void put(String conversationId, String field, String value);
+    void put(String userId, String conversationId, String field, String value);
 
-    void clear(String conversationId);
+    void clear(String userId, String conversationId);
 }
