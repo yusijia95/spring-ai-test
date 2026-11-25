@@ -3,18 +3,32 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
-const conversationId = crypto.randomUUID()
-const subscriptions = ref([])
-const messages = ref([
-  {
+function welcomeMessage() {
+  return {
     role: 'assistant',
     content: '您好，我是房产客服。可以帮您办理认购、撤销认购，也可以查询楼盘价格和周边配套。办理认购请提供房屋坐落、购买方姓名和证件号码。',
-  },
-])
+  }
+}
+
+const conversationId = ref('')
+const subscriptions = ref([])
+const messages = ref([welcomeMessage()])
 const input = ref('')
 const sending = ref(false)
 const listError = ref('')
 const chatList = ref(null)
+
+// ---- 会话列表（GET /api/auth/conversations：status=1 进行中，按 updatedAt 倒序）----
+const conversations = ref([])
+const conversationsLoading = ref(false)
+const conversationsError = ref('')
+// localStorage 只存最近一次的 conversationId，用于刷新后判断"当前会话"是否还在服务端列表里。
+// 不存消息：消息在后端 Redis/PG，本阶段无历史消息回显接口，切换会话只能拿到新开场白。
+const CURRENT_KEY = 'agent.current-conversation'
+// 会话消息缓存（仅内存）：切换会话时暂存当前会话的消息，切回时还原。
+const messagesCache = {}
+// 当前流式请求的 AbortController：切走/新建会话时 abort 旧流，防止回复写错会话。
+let activeController = null
 
 // ---- 登录（P0-1 假登录：所有业务接口都要 Authorization: Bearer token）----
 const token = ref(localStorage.getItem('agent.token') || '')
@@ -49,6 +63,7 @@ async function login() {
     localStorage.setItem('agent.token', data.token)
     localStorage.setItem('agent.username', name)
     await loadSubscriptions()
+    await loadConversations()
   } catch (error) {
     loginError.value = '无法连接后端服务'
   }
@@ -64,7 +79,12 @@ async function logout() {
   authUser.value = null
   subscriptions.value = []
   listError.value = ''
+  conversations.value = []
+  conversationId.value = ''
+  messages.value = [welcomeMessage()]
+  input.value = ''
   localStorage.removeItem('agent.token')
+  localStorage.removeItem(CURRENT_KEY)
 }
 
 // Drawer state
@@ -146,6 +166,124 @@ async function loadSubscriptions() {
   }
 }
 
+// ---- 会话列表：拉取 / 切换 / 新建 ----
+
+async function loadConversations() {
+  if (!token.value) {
+    conversations.value = []
+    conversationsError.value = ''
+    return
+  }
+  conversationsLoading.value = true
+  conversationsError.value = ''
+  try {
+    const response = await fetch('/api/auth/conversations', { headers: authHeaders() })
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('登录已过期，请重新登录')
+    }
+    if (!response.ok) {
+      throw new Error('加载会话列表失败')
+    }
+    conversations.value = await response.json()
+  } catch (error) {
+    conversations.value = []
+    conversationsError.value = error.message || '无法连接后端服务'
+  } finally {
+    conversationsLoading.value = false
+  }
+}
+
+// 刷新后"当前会话"的高亮判断：
+// 1) conversationId 有值且命中列表 → 高亮；
+// 2) 否则取 updatedAt 最新的一条（后端已倒序）；
+// 3) 都没有（从未聊过）→ 空，不选任何会话。
+function selectCurrentFromList() {
+  const restored = conversationId.value
+    ? conversations.value.find(item => String(item.id) === conversationId.value)
+    : null
+  conversationId.value = restored ? String(restored.id) : (conversations.value[0] ? String(conversations.value[0].id) : '')
+}
+
+function currentConversation() {
+  return conversations.value.find(item => String(item.id) === conversationId.value) || null
+}
+
+// 会话没有标题（title 目前为 null）时的显示文案：按最近更新时间显示相对时间
+function conversationLabel(item) {
+  if (item.title) {
+    return item.title
+  }
+  const date = new Date(item.updatedAt)
+  const now = new Date()
+  const diffMs = now - date
+  const minute = 60 * 1000
+  const hour = 60 * minute
+  const day = 24 * hour
+  if (diffMs < minute) {
+    return '刚刚'
+  }
+  if (diffMs < hour) {
+    return `${Math.floor(diffMs / minute)} 分钟前`
+  }
+  if (diffMs < day && now.getDate() === date.getDate()) {
+    return `${Math.floor(diffMs / hour)} 小时前`
+  }
+  if (diffMs < day * 7) {
+    return `${Math.floor(diffMs / day)} 天前`
+  }
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mi = String(date.getMinutes()).padStart(2, '0')
+  return date.getFullYear() === now.getFullYear()
+    ? `${mm}-${dd} ${hh}:${mi}`
+    : `${date.getFullYear()}-${mm}-${dd}`
+}
+
+async function openConversation(id) {
+  const idStr = String(id)
+  if (idStr === conversationId.value) {
+    return
+  }
+  // 消息是单例的：切走前把当前会话的消息挪到缓存，切回时再还原，避免重复加载时丢失。
+  if (conversationId.value) {
+    messagesCache[conversationId.value] = messages.value
+  }
+  // 有旧会话还在流式回复：停掉它，避免回复继续追加到已切走的视图/旧气泡里
+  if (sending.value && activeController) {
+    activeController.abort()
+  }
+  conversationId.value = idStr
+  localStorage.setItem(CURRENT_KEY, idStr)
+  const cached = messagesCache[idStr]
+  messages.value = cached || [welcomeMessage()]
+  if (cached) {
+    delete messagesCache[idStr]
+  }
+  stickToBottom.value = true
+  scrollToBottom(true)
+}
+
+// 新建会话：conversationId 置空，下一条消息由后端 /api/agent/chat 的 getOrCreate 新建并返回权威 id
+function startNewConversation() {
+  if (conversationId.value) {
+    messagesCache[conversationId.value] = messages.value
+  }
+  if (sending.value && activeController) {
+    activeController.abort()
+  }
+  conversationId.value = ''
+  localStorage.removeItem(CURRENT_KEY)
+  messages.value = [welcomeMessage()]
+  input.value = ''
+  stickToBottom.value = true
+  scrollToBottom(true)
+  if (drawerRef.value) {
+    const textarea = drawerRef.value.querySelector('textarea')
+    if (textarea) textarea.focus()
+  }
+}
+
 function isNearBottom() {
   const el = chatList.value
   if (!el) return true
@@ -207,11 +345,16 @@ async function sendMessage() {
   stickToBottom.value = true
   scrollToBottom(true)
 
+  // 解构快照：避免流式读取期间用户切会话/新建，把消息追加到错误会话的气泡里
+  const cid = conversationId.value
+  const controller = new AbortController()
+  activeController = controller
   try {
     const response = await fetch('/api/agent/chat', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ conversationId, message: text }),
+      body: JSON.stringify({ conversationId: cid, message: text }),
+      signal: controller.signal,
     })
     if (response.status === 401 || response.status === 403) {
       throw new Error('登录已过期或无权限，请重新登录')
@@ -222,11 +365,22 @@ async function sendMessage() {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    // 流空闲超时：qwen-turbo 短回复时部分代理/链路下 reader.read() 可能不返回 done，
+    // 导致 sending 永久卡死、按钮一直"办理中"。连续 30s 没新数据就主动停读。
+    const IDLE_TIMEOUT = 30_000
+    let lastDataAt = Date.now()
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ done: Date.now() - lastDataAt >= IDLE_TIMEOUT, value: undefined }), IDLE_TIMEOUT)
+        ),
+      ])
       if (done) {
+        // 自然结束或空闲超时，都收尾
         break
       }
+      lastDataAt = Date.now()
       buffer += decoder.decode(value, { stream: true })
       const chunks = parseSse(buffer)
       buffer = chunks.rest
@@ -235,14 +389,33 @@ async function sendMessage() {
         await scrollToBottom()
       }
     }
+    // done 之后 buffer 可能残留最后一个不带 \n\n 尾巴的事件，补解析一次
+    const tail = parseSse(buffer + '\n\n')
+    for (const piece of tail.payloads) {
+      assistant.content += piece
+      await scrollToBottom()
+    }
     if (!assistant.content) {
       assistant.content = '未收到回复，请稍后重试。'
     }
   } catch (error) {
-    assistant.content = error.message || '请求失败，请确认后端已启动。'
+    // 切走/新建会话会 abort 旧流：此时消息已被挪进缓存或已切换视图，
+    // 不覆盖气泡文案（避免切回的会话里残留"已停止"提示）。
+    if (error.name !== 'AbortError') {
+      assistant.content = error.message || '请求失败，请确认后端已启动。'
+    }
   } finally {
+    if (activeController === controller) {
+      activeController = null
+    }
     sending.value = false
     await loadSubscriptions()
+    // 首条消息走"新建会话"路径：服务端 getOrCreate 会落一条新 conversation，
+    // 刷新列表并选中它，让左侧列表立刻出现这个会话（updatedAt 最新，排最前）。
+    if (!cid) {
+      await loadConversations()
+      selectCurrentFromList()
+    }
     await scrollToBottom()
   }
 }
@@ -280,11 +453,16 @@ onMounted(async () => {
       const response = await fetch('/api/auth/me', { headers: authHeaders() })
       if (response.ok) {
         authUser.value = await response.json()
+        // 恢复上次的当前会话（localStorage），再拉会话列表
+        conversationId.value = localStorage.getItem(CURRENT_KEY) || ''
         await loadSubscriptions()
+        await loadConversations()
+        selectCurrentFromList()
         return
       }
       token.value = ''
       localStorage.removeItem('agent.token')
+      localStorage.removeItem(CURRENT_KEY)
     } catch (error) {
       // 后端未就绪：保持未登录态，不阻塞页面
     }
@@ -448,18 +626,66 @@ onUnmounted(() => {
             </svg>
             房产客服智能体
           </h2>
+          <div class="header-actions">
+            <button
+              type="button"
+              class="btn-new-conv"
+              @click="startNewConversation"
+              aria-label="新建会话"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              新会话
+            </button>
+            <button
+              type="button"
+              class="btn-close"
+              @click="closeDrawer"
+              aria-label="关闭智能体"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- 会话列表：一行 chip，当前会话置顶高亮，其余按更新时间倒序 -->
+        <div v-if="authUser" class="convs">
           <button
             type="button"
-            class="btn-close"
-            @click="closeDrawer"
-            aria-label="关闭智能体"
+            class="conv-chip"
+            :class="{ active: !conversationId }"
+            @click="startNewConversation"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
+            新会话
           </button>
-        </header>
+          <button
+            v-for="item in conversations"
+            :key="item.id"
+            type="button"
+            class="conv-chip"
+            :class="{ active: String(item.id) === conversationId }"
+            :title="formatTime(item.updatedAt)"
+            @click="openConversation(item.id)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span class="conv-chip-label">
+              {{ item.title || conversationLabel(item) }}
+            </span>
+          </button>
+          <span v-if="conversationsLoading && conversations.length === 0" class="convs-hint">加载中…</span>
+          <span v-else-if="conversationsError" class="convs-hint">{{ conversationsError }}</span>
+        </div>
 
         <!-- 消息列表 -->
         <div ref="chatList" class="messages" @scroll.passive="onMessagesScroll">
@@ -877,8 +1103,104 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 18px 28px 14px;
   border-bottom: 1px solid #f0f2f5;
+  flex-shrink: 0;
+}
+
+/* 头部右侧按钮组：新会话 + 关闭 */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 新会话按钮：浅色描边，与关闭按钮并列 */
+.btn-new-conv {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #dfe3ea;
+  background: #fff;
+  color: #2563eb;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+
+.btn-new-conv:hover {
+  background: #eef2ff;
+  border-color: #2563eb;
+}
+
+.btn-new-conv svg {
+  flex-shrink: 0;
+}
+
+/* ========== 会话列表（一行 chip）========== */
+.convs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 28px;
+  border-bottom: 1px solid #f0f2f5;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* 隐藏横向滚动条：chip 一行放不下时仍可拖动，视觉上不出现滚动条 */
+.convs::-webkit-scrollbar {
+  display: none;
+}
+
+.conv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #555;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
+  font-family: inherit;
+}
+
+.conv-chip:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #333;
+}
+
+/* 当前会话：蓝色主色高亮 */
+.conv-chip.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+  font-weight: 500;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+}
+
+.conv-chip-label {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.convs-hint {
+  font-size: 12px;
+  color: #999;
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -1116,6 +1438,15 @@ button[type='submit']:disabled {
     width: min(640px, calc(100vw - 96px));
   }
 
+  .drawer-header {
+    padding: 14px 20px 12px;
+  }
+
+  .convs {
+    padding: 10px 20px;
+    gap: 6px;
+  }
+
   .messages {
     padding: 16px 22px;
     gap: 12px;
@@ -1139,6 +1470,14 @@ button[type='submit']:disabled {
     left: 0;
     width: 100vw;
     border-radius: 0;
+  }
+
+  .drawer-header {
+    padding: 14px 16px 12px;
+  }
+
+  .convs {
+    padding: 10px 16px;
   }
 }
 </style>
