@@ -4,9 +4,13 @@ import com.yusijia.houseclientservices.agent.memory.AgentChatMemory;
 import com.yusijia.houseclientservices.agent.memory.ChatDigestStore;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryLimits;
+import com.yusijia.houseclientservices.security.PiiMasker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayDeque;
@@ -203,8 +207,13 @@ public class RedisChatMemory implements AgentChatMemory {
             return;
         }
         try {
-            String previous = digest(conversationId);
-            String newDigest = compressor.compress(previous, decode(raw.subList(0, compressCount)));
+            // A3：喂给摘要模型的旧消息先脱敏——PII 不进摘要模型的请求体，
+            // 摘要模型是便宜的外部模型，它的调用日志/训练采样可能留存 prompt。
+            // 工作记忆窗口本身保留原文：模型下一轮要用用户报的完整证件号去 searchPerson，
+            // 窗口存掩码会直接破坏认购流程。
+            String previous = PiiMasker.maskForStorage(digest(conversationId));
+            String newDigest = PiiMasker.maskForStorage(
+                    compressor.compress(previous, maskMessages(decode(raw.subList(0, compressCount)))));
             if (!StringUtils.hasText(newDigest)) {
                 // 压缩失败：退回截断到 keepRecent，至少保证下一轮不超上下文
                 redis.ltrim(key, -limits.keepRecent(), -1);
@@ -236,6 +245,26 @@ public class RedisChatMemory implements AgentChatMemory {
             }
         }
         return messages;
+    }
+
+    /** A3：摘要输入侧脱敏（只用于喂给摘要模型，工作记忆窗口本身不动） */
+    private List<Message> maskMessages(List<Message> messages) {
+        List<Message> masked = new ArrayList<>(messages.size());
+        for (Message message : messages) {
+            String text = message.getText();
+            String maskedText = PiiMasker.maskForStorage(text);
+            if (maskedText == null) {
+                masked.add(message);
+                continue;
+            }
+            masked.add(switch (message.getMessageType()) {
+                case USER -> new UserMessage(maskedText);
+                case ASSISTANT -> new AssistantMessage(maskedText);
+                case SYSTEM -> new SystemMessage(maskedText);
+                default -> message;
+            });
+        }
+        return masked;
     }
 
     private void appendLocal(String conversationId, List<Message> messages) {

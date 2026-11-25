@@ -70,6 +70,30 @@ class PiiMaskerTest {
     }
 
     @Test
+    void 存储脱敏_身份证只留后四位() {
+        // 日志口径是"前6后4"（保留地址码便于排查）；存储口径更严：整段打码只留后四位
+        assertEquals("客户证件 **************1234 已记录",
+                PiiMasker.maskForStorage("客户证件 330102199001011234 已记录"));
+    }
+
+    @Test
+    void 存储脱敏_手机号同mask口径() {
+        assertEquals("电话 138****5678", PiiMasker.maskForStorage("电话 13812345678"));
+    }
+
+    @Test
+    void 存储脱敏_无PII文本原样返回() {
+        String text = "客户预算 300 万，意向江宁区，房号 1203 已锁定。";
+        assertEquals(text, PiiMasker.maskForStorage(text));
+    }
+
+    @Test
+    void 存储脱敏_null与空串原样返回() {
+        assertNull(PiiMasker.maskForStorage(null));
+        assertEquals("", PiiMasker.maskForStorage(""));
+    }
+
+    @Test
     void 无PII的普通中文句子原样返回() {
         String text = "好的，我帮您查一下这个楼盘的价格。";
         assertEquals(text, PiiMasker.mask(text));

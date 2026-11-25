@@ -9,7 +9,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Supplier;
+import java.util.function.BiFunction;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -44,7 +44,7 @@ class RedisChatMemoryTest {
     @Test
     void 字符超预算时压缩最旧的一段并保留最近对话() {
         RedisChatMemory memory = memory(40, 60, 2);
-        compressor.reply = () -> "客户在看 A 楼盘 101 室";
+        compressor.reply = (previous, messages) -> "客户在看 A 楼盘 101 室";
         memory.add("c1", new UserMessage("一".repeat(40)));
         memory.add("c1", new UserMessage("二".repeat(40)));
         memory.add("c1", new UserMessage("三".repeat(40)));
@@ -56,9 +56,44 @@ class RedisChatMemoryTest {
     }
 
     @Test
+    void 摘要落库前脱敏_完整证件号不落() {
+        RedisChatMemory memory = memory(40, 60, 2);
+        // 摘要模型原样回显输入里的 PII（最坏情况），落库前必须被截成掩码
+        compressor.reply = (previous, messages) -> "证件330102199001011234，电话13812345678";
+        memory.add("c1", new UserMessage("我的证件号是 330102199001011234，电话 13812345678。" + "补".repeat(20)));
+        memory.add("c1", new UserMessage("二".repeat(40)));
+        memory.add("c1", new UserMessage("三".repeat(40)));
+
+        String stored = digestStore.latest("c1");
+        assertNotNull(stored);
+        // 18 位身份证与 11 位手机号都不允许出现在 PG 摘要 / Redis 摘要缓存里
+        assertEquals("证件**************1234，电话138****5678", stored);
+        assertEquals(stored, redis.strings.get("chat:{u1:c1}:digest"));
+        // 工作记忆窗口本身保留原文（模型下一轮要用完整证件号去 searchPerson）
+        List<Message> window = memory.get("c1");
+        assertEquals(2, window.size());
+        assertEquals("二".repeat(40), window.get(0).getText());
+    }
+
+    @Test
+    void 压缩输入侧脱敏_完整证件号不进摘要模型() {
+        RedisChatMemory memory = memory(40, 60, 2);
+        // FakeCompressor 原样回显它收到的最后一条消息，用来断言"喂进去的是什么"
+        compressor.reply = (previous, messages) -> messages.get(messages.size() - 1).getText();
+        memory.add("c1", new UserMessage("我的证件号是 330102199001011234。" + "补".repeat(20)));
+        memory.add("c1", new UserMessage("二".repeat(40)));
+        memory.add("c1", new UserMessage("三".repeat(40)));
+
+        String seenByModel = digestStore.latest("c1");
+        assertNotNull(seenByModel);
+        // 摘要模型收到的是脱敏文本，完整证件号没有进它的请求体
+        assertEquals("我的证件号是 **************1234。" + "补".repeat(20), seenByModel);
+    }
+
+    @Test
     void 压缩失败退回截断且不抛异常() {
         RedisChatMemory memory = memory(40, 60, 2);
-        compressor.reply = () -> null;
+        compressor.reply = (previous, messages) -> null;
         memory.add("c1", new UserMessage("一".repeat(40)));
         memory.add("c1", new UserMessage("二".repeat(40)));
         memory.add("c1", new UserMessage("三".repeat(40)));
@@ -70,7 +105,7 @@ class RedisChatMemoryTest {
     @Test
     void 锁被其他实例占用时跳过压缩() {
         RedisChatMemory memory = memory(40, 60, 2);
-        compressor.reply = () -> "不该被写下";
+        compressor.reply = (previous, messages) -> "不该被写下";
         redis.strings.put("chat:{u1:c1}:lock:digest", "1");
 
         memory.add("c1", new UserMessage("一".repeat(40)));
@@ -129,11 +164,11 @@ class RedisChatMemoryTest {
     }
 
     private static final class FakeCompressor implements ChatMemoryCompressor {
-        Supplier<String> reply = () -> null;
+        BiFunction<String, List<Message>, String> reply = (previous, messages) -> null;
 
         @Override
         public String compress(String previousDigest, List<Message> messages) {
-            return reply.get();
+            return reply.apply(previousDigest, messages);
         }
     }
 

@@ -79,6 +79,28 @@ public final class PiiMasker {
     }
 
     /**
+     * 存储用脱敏：证件号只保留后四位（{@code ************1234}），其余同 {@link #mask}。
+     * <p>
+     * 用于对话摘要等<b>旁路存储</b>：摘要里留后四位能让后续轮次保留"客户身份线索"，
+     * 而完整证件号落 PG/Redis 就失去了脱敏的意义。
+     * 注意：{@code mask} 的证件号规则是"前 6 后 4"（日志口径，保留地址码便于排查归属），
+     * 存储口径更严，所以这里单独一条规则，不能复用 {@code mask}。
+     *
+     * @param text 摘要等文本，null / 空串原样返回
+     * @return 脱敏后的文本
+     */
+    public static String maskForStorage(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        String masked = replace(text, ID_CARD_18,
+                m -> "*".repeat(14) + m.group(3));
+        masked = replace(masked, MOBILE_11, m -> m.group(1) + "****" + m.group(3));
+        masked = replace(masked, LONG_NUMBER, m -> m.group(1) + "*".repeat(m.group(2).length()) + m.group(3));
+        return replace(masked, LONG_NUMBER_15, m -> m.group(1) + "*".repeat(7) + m.group(3));
+    }
+
+    /**
      * 超长文本截断，并在末尾标注原始长度。
      *
      * @param text 原始文本，null 原样返回

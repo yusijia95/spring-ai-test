@@ -35,6 +35,7 @@ public class LlmChatMemoryCompressor implements ChatMemoryCompressor {
 
             严格要求：
             - 只写对话里出现过的事实，禁止推测、补全、编造任何数字或编号。
+            - 证件号、手机号只能保留最后 4 位（如 1234），禁止复述完整号码。
             - 不要写寒暄、语气词、客服的客套话。
             - 输出纯文本，不超过 300 字，不要 Markdown 标题，不要分点符号可用"；"分隔。
             """;

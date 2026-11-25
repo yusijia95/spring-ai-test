@@ -369,11 +369,12 @@ public class MasterDataService {
         };
     }
 
+    /**
+     * 证件号掩码：统一走 {@link PiiMasker}（前 6 后 4，与日志脱敏同一口径）。
+     * 旧实现固定 10 个星号，18 位身份证会露出 8 位生日段，属于脱敏不彻底。
+     */
     private String maskIdNo(String idNo) {
-        if (idNo == null || idNo.length() < 8) {
-            return idNo;
-        }
-        return idNo.substring(0, 4) + "**********" + idNo.substring(idNo.length() - 4);
+        return PiiMasker.mask(idNo);
     }
 
     /** 手机号按权限决定明文或掩码；掩码规则与日志脱敏共用 {@link PiiMasker}，避免两套口径。 */
