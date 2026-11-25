@@ -183,6 +183,10 @@ public class SubscriptionTools {
         String token = computeIdempotencyKey(houseIds, personIds, orgIds);
         try {
             SubscriptionView view = subscriptionService.create(rooms, persons, orgs, token);
+            // P0-4 → P0-5：真正创建成功（客户已确认）才标记，审计行据此写 confirmed=1
+            if (exec != null) {
+                exec.markWriteConfirmed();
+            }
             return "认购业务已生成。编号=" + view.bizNo()
                     + "，房屋坐落=" + String.join("、", view.houseLocations())
                     + "，购买方=" + String.join("、", view.buyerNames())
@@ -267,6 +271,10 @@ public class SubscriptionTools {
         }
         try {
             SubscriptionView view = subscriptionService.cancel(bizNo, true);
+            // P0-4 → P0-5：真正撤销成功才标记，审计行据此写 confirmed=1
+            if (exec != null) {
+                exec.markWriteConfirmed();
+            }
             return "认购业务已撤销。编号=" + view.bizNo()
                     + "，房屋坐落=" + String.join("、", view.houseLocations())
                     + "，购房人=" + String.join("、", view.buyerNames());

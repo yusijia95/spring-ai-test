@@ -44,4 +44,13 @@ public final class PermissionPoints {
     public static final String SUBSCRIPTION_CREATE = "subscription:create";
     /** 撤销认购（仅坐席）。 */
     public static final String SUBSCRIPTION_CANCEL = "subscription:cancel";
+
+    // ---- 审计 ----
+    /**
+     * 查询智能体审计记录（仅坐席，P0-5）。
+     * <p>
+     * 审计里含他人会话的工具入参/结果（脱敏），客户角色不应能按 conversationId 翻别人的操作记录，
+     * 所以只给坐席；坐席按 conversationId 反查"哪一轮、哪些技能、调了什么工具、是否经确认"。
+     */
+    public static final String AUDIT_READ = "audit:read";
 }

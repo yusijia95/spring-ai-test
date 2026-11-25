@@ -1,5 +1,6 @@
 package com.yusijia.houseclientservices.agent;
 
+import com.yusijia.houseclientservices.domain.audit.ToolCallAudit;
 import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
 import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
@@ -58,7 +59,9 @@ public class ToolRegistry {
         for (ToolCallback callback : businessCallbacks) {
             String name = callback.getToolDefinition().name();
             // 写工具统一套"外部内容熔断"：读过网页正文后，本轮不允许落库操作
-            byName.put(name, WRITE_TOOLS.contains(name) ? guardWriteTool(callback) : callback);
+            ToolCallback secured = WRITE_TOOLS.contains(name) ? guardWriteTool(callback) : callback;
+            // 审计装饰器放最外层：熔断/守卫的拒绝文案同样是一次工具调用，也要进审计
+            byName.put(name, audit(secured));
         }
 
         // 百度地图 MCP 工具：统一包装，剥掉 MCP content 数组、格式化输出、记住地理编码坐标
@@ -71,7 +74,7 @@ public class ToolRegistry {
                 for (ToolCallback callback : provider.getToolCallbacks()) {
                     String name = callback.getToolDefinition().name();
                     if (declaredTools.contains(name)) {
-                        byName.put(name, wrap(callback));
+                        byName.put(name, audit(wrap(callback)));
                     } else {
                         dropped.add(name);
                     }
@@ -157,6 +160,50 @@ public class ToolRegistry {
                 }
                 // 转发上下文：内层 MethodToolCallback 需要它注入 @Tool 的 ToolContext 参数
                 return callback.call(toolInput, toolContext);
+            }
+        };
+    }
+
+    /**
+     * P0-5 审计装饰器（套在最外层）：计时 + 把每次调用记入本轮 {@link ToolExecutionContext}。
+     * <p>
+     * 只记录，不拦截：任何异常原样上抛（主流程该报错就报错），审计记录里标 failed；
+     * 上下文缺失（框架直调、无 toolContext）时跳过记录，不影响调用本身。
+     */
+    static ToolCallback audit(ToolCallback callback) {
+        return new ToolCallback() {
+            @Override
+            public org.springframework.ai.tool.definition.ToolDefinition getToolDefinition() {
+                return callback.getToolDefinition();
+            }
+
+            @Override
+            public String call(String toolInput) {
+                return call(toolInput, null);
+            }
+
+            @Override
+            public String call(String toolInput,
+                               org.springframework.ai.chat.model.ToolContext toolContext) {
+                ToolExecutionContext exec = ToolExecutionContext.of(toolContext);
+                long start = System.currentTimeMillis();
+                try {
+                    String result = callback.call(toolInput, toolContext);
+                    if (exec != null) {
+                        exec.recordToolCall(new ToolCallAudit(
+                                callback.getToolDefinition().name(), toolInput, result,
+                                System.currentTimeMillis() - start, false));
+                    }
+                    return result;
+                } catch (RuntimeException e) {
+                    if (exec != null) {
+                        exec.recordToolCall(new ToolCallAudit(
+                                callback.getToolDefinition().name(), toolInput,
+                                "工具调用异常: " + e.getMessage(),
+                                System.currentTimeMillis() - start, true));
+                    }
+                    throw e;
+                }
             }
         };
     }

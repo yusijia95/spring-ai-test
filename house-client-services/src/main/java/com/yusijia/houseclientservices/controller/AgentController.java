@@ -10,6 +10,7 @@ import com.yusijia.houseclientservices.controller.dto.ChatRequest;
 import com.yusijia.houseclientservices.security.Authorization;
 import com.yusijia.houseclientservices.security.PermissionPoints;
 import com.yusijia.houseclientservices.security.UserContext;
+import com.yusijia.houseclientservices.service.AgentAuditService;
 import com.yusijia.houseclientservices.service.ConversationService;
 import jakarta.servlet.http.HttpServletRequest;
 import com.yusijia.houseclientservices.tool.ProjectTools;
@@ -24,6 +25,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -54,6 +56,8 @@ public class AgentController {
     private final AgentChatMemory agentChatMemory;
     private final SessionStateTools sessionStateTools;
     private final ConversationService conversationService;
+    private final AgentAuditService agentAuditService;
+    private final String chatModel;
 
     public AgentController(@Qualifier("houseServiceChatClient") ChatClient houseServiceChatClient,
                            ProjectTools projectTools,
@@ -63,7 +67,9 @@ public class AgentController {
                            ToolRegistry toolRegistry,
                            AgentChatMemory agentChatMemory,
                            SessionStateTools sessionStateTools,
-                           ConversationService conversationService) {
+                           ConversationService conversationService,
+                           AgentAuditService agentAuditService,
+                           @Value("${agent.chat.model:qwen-max}") String chatModel) {
         this.houseServiceChatClient = houseServiceChatClient;
         this.projectTools = projectTools;
         this.webSearchTools = webSearchTools;
@@ -73,6 +79,8 @@ public class AgentController {
         this.agentChatMemory = agentChatMemory;
         this.sessionStateTools = sessionStateTools;
         this.conversationService = conversationService;
+        this.agentAuditService = agentAuditService;
+        this.chatModel = chatModel;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -158,21 +166,24 @@ public class AgentController {
                     .content()
                     .transform(this::stripLeadingNoise)
                     .switchIfEmpty(Flux.just("抱歉，未能处理您的请求，请您重新描述。"));
-            return attachSummary(flux, conversationId, skills, toolNames, hasRetrieval, startTime);
+            return attachSummary(flux, user, conversationId, skills, toolNames, hasRetrieval, exec, startTime);
         }
         String answer = answerWithTools(systemPrompt, retrieval, request.message(), toolCallbacks,
                 conversationId, exec);
         logSummary(conversationId, skills, toolNames, hasRetrieval, answer, startTime);
+        // P0-5：同步写审计（有工具路径拿得到完整工具调用记录），写失败不影响已生成的回答
+        agentAuditService.record(user, conversationId, skillNames(skills), exec, chatModel,
+                System.currentTimeMillis() - startTime);
         return Flux.just(answer);
     }
 
     /**
-     * 给流式 Flux 挂一个 doOnComplete/doOnError，结束时打结构化摘要日志。
+     * 给流式 Flux 挂一个 doOnComplete/doOnError，结束时打结构化摘要日志并落审计。
      * 流式路径拿不到完整回复文本，只记 token 数和耗时。
      */
-    private Flux<String> attachSummary(Flux<String> flux, String conversationId,
+    private Flux<String> attachSummary(Flux<String> flux, UserContext user, String conversationId,
                                        List<Skill> skills, List<String> toolNames,
-                                       boolean hasRetrieval, long startTime) {
+                                       boolean hasRetrieval, ToolExecutionContext exec, long startTime) {
         java.util.concurrent.atomic.AtomicInteger chunkCount = new java.util.concurrent.atomic.AtomicInteger(0);
         java.util.concurrent.atomic.AtomicInteger charCount = new java.util.concurrent.atomic.AtomicInteger(0);
         return flux
@@ -182,12 +193,17 @@ public class AgentController {
                         charCount.addAndGet(chunk.length());
                     }
                 })
-                .doOnComplete(() -> logSummary(conversationId, skills, toolNames, hasRetrieval,
-                        null, startTime))
-                .doOnError(e -> log.warn("agent chat 流式异常: conversationId={}, error={}", conversationId, e.getMessage()))
                 .doOnComplete(() -> {
-                    // 上面的 doOnComplete 已经打了，这里不重复
-                });
+                    logSummary(conversationId, skills, toolNames, hasRetrieval, null, startTime);
+                    // P0-5：流式路径（无工具）也要落一行审计；正常完成才记，中途异常不算一轮
+                    agentAuditService.record(user, conversationId, skillNames(skills), exec, chatModel,
+                            System.currentTimeMillis() - startTime);
+                })
+                .doOnError(e -> log.warn("agent chat 流式异常: conversationId={}, error={}", conversationId, e.getMessage()));
+    }
+
+    private List<String> skillNames(List<Skill> skills) {
+        return skills.stream().map(Skill::name).toList();
     }
 
     /**

@@ -38,6 +38,17 @@ class AuthorizationTest {
     }
 
     @Test
+    void customer_cannotReadAudit() {
+        // 审计含他人会话的工具入参/结果（脱敏），只给坐席反查业务动作
+        assertThat(Authorization.hasPermission(customer, PermissionPoints.AUDIT_READ)).isFalse();
+    }
+
+    @Test
+    void agent_canReadAudit() {
+        assertThat(Authorization.hasPermission(agent, PermissionPoints.AUDIT_READ)).isTrue();
+    }
+
+    @Test
     void agent_hasAllPermissions() {
         for (String p : new String[]{
                 PermissionPoints.CHAT_USE,

@@ -14,7 +14,8 @@ import java.util.Set;
  *   <li>{@code customer}：chat:use、chat:conversation:read、data:house/person/org:search、
  *       subscription:read、subscription:create、subscription:cancel</li>
  *   <li>{@code agent}：customer 的全部权限，另加 {@code data:person:phone:read}
- *       （可看客户手机号明文）；其余区别不在权限点而在数据范围——见 {@link DataScope}</li>
+ *       （可看客户手机号明文）、{@code audit:read}（P0-5 审计查询）；
+ *       其余区别不在权限点而在数据范围——见 {@link DataScope}</li>
  * </ul>
  * <p>
  * 控制器里调用 {@link #requirePermission(HttpServletRequest, String)}，
@@ -46,7 +47,8 @@ public final class Authorization {
             PermissionPoints.DATA_ORG_SEARCH,
             PermissionPoints.SUBSCRIPTION_READ,
             PermissionPoints.SUBSCRIPTION_CREATE,
-            PermissionPoints.SUBSCRIPTION_CANCEL
+            PermissionPoints.SUBSCRIPTION_CANCEL,
+            PermissionPoints.AUDIT_READ
     );
 
     private Authorization() {

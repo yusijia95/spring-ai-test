@@ -1,8 +1,11 @@
 package com.yusijia.houseclientservices.tool;
 
+import com.yusijia.houseclientservices.domain.audit.ToolCallAudit;
 import com.yusijia.houseclientservices.security.UserContext;
 import org.springframework.ai.chat.model.ToolContext;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -23,6 +26,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>{@code externalContentSeen}：本轮是否读过外部不可信内容（写工具熔断依据）</li>
  *   <li>{@code createSubscriptionCalled}：本轮是否真的创建过认购（防模型幻觉）</li>
  *   <li>{@code lastGeocodeLocation}：最近一次地理编码坐标（纠正百度地图工具误用）</li>
+ *   <li>{@code auditCalls}：本轮所有工具调用（P0-5 审计），由 ToolRegistry 的审计装饰器追加</li>
+ *   <li>{@code writeConfirmed}：本轮写操作是否经客户二次确认（P0-4 → P0-5 confirmed 字段）</li>
  * </ul>
  * 字段用 Atomic* 是因为同一次请求内工具可能被框架并行调用；跨请求互不影响。
  */
@@ -39,6 +44,9 @@ public final class ToolExecutionContext {
     private final AtomicReference<String> lastGeocodeLocation = new AtomicReference<>();
     private final AtomicBoolean projectSearchCalled = new AtomicBoolean(false);
     private final AtomicReference<String> projectNotFoundFact = new AtomicReference<>();
+    private final AtomicBoolean writeConfirmed = new AtomicBoolean(false);
+    /** 本轮所有工具调用（P0-5 审计），按调用完成顺序追加；同步写，供请求结束后一次性落表。 */
+    private final List<ToolCallAudit> auditCalls = Collections.synchronizedList(new java.util.ArrayList<>());
 
     public ToolExecutionContext(UserContext user, String conversationId) {
         this.user = user;
@@ -111,5 +119,32 @@ public final class ToolExecutionContext {
 
     public String projectNotFoundFact() {
         return projectNotFoundFact.get();
+    }
+
+    /** 记一次工具调用（P0-5 审计），由 ToolRegistry 的审计装饰器统一调用。 */
+    public void recordToolCall(ToolCallAudit call) {
+        if (call != null) {
+            auditCalls.add(call);
+        }
+    }
+
+    /** 本轮工具调用审计快照（只读拷贝，请求结束后落表用）。 */
+    public List<ToolCallAudit> auditCalls() {
+        synchronized (auditCalls) {
+            return List.copyOf(auditCalls);
+        }
+    }
+
+    /**
+     * 标记本轮写操作已获客户二次确认（P0-4）。
+     * 只有真正执行了创建/撤销（confirmed=true 且成功）才由写工具标记；
+     * 预览（confirmed=false）、被熔断、被数据范围拦截都不算。
+     */
+    public void markWriteConfirmed() {
+        writeConfirmed.set(true);
+    }
+
+    public boolean writeConfirmed() {
+        return writeConfirmed.get();
     }
 }
