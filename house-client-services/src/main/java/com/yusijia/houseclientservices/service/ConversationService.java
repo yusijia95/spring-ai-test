@@ -78,6 +78,46 @@ public class ConversationService {
                 .setSql("updated_at = CURRENT_TIMESTAMP(3)"));
     }
 
+    /**
+     * 首轮对话时补会话标题（取首条用户消息的截断，不调模型，省 token 且够辨识）。
+     * <p>
+     * 幂等：只在 {@code title IS NULL} 或空串时写入，已有标题的会话不覆盖——
+     * 多实例并发下条件 UPDATE 天然只有一个赢家，不需要先读再判断。
+     * 非雪花 id（老 UUID 会话）不在表里，静默跳过。
+     */
+    public void ensureTitle(UserContext user, String conversationId, String firstMessage) {
+        Long id = parseSnowflake(conversationId);
+        String title = titleOf(firstMessage);
+        if (id == null || title == null) {
+            return;
+        }
+        conversationMapper.update(null, new LambdaUpdateWrapper<Conversation>()
+                .eq(Conversation::getId, id)
+                .eq(Conversation::getOwnerUserId, user.userId())
+                .and(w -> w.isNull(Conversation::getTitle).or().eq(Conversation::getTitle, ""))
+                .set(Conversation::getTitle, title));
+    }
+
+    /**
+     * 从首条消息生成标题：空白折叠成单空格，按 code point 截断 24 个字，超长补省略号。
+     * 用 code point 而不是 char，避免把 emoji 的代理对截成半个字符。
+     */
+    static String titleOf(String message) {
+        if (!StringUtils.hasText(message)) {
+            return null;
+        }
+        String normalized = message.replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        final int max = 24;
+        if (normalized.codePointCount(0, normalized.length()) <= max) {
+            return normalized;
+        }
+        int end = normalized.offsetByCodePoints(0, max);
+        return normalized.substring(0, end) + "…";
+    }
+
     /** 雪花 id 解析；不是纯数字（老 UUID 会话）返回 null */
     private static Long parseSnowflake(String conversationId) {
         if (!StringUtils.hasText(conversationId)) {

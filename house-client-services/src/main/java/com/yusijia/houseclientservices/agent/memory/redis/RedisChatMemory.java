@@ -101,7 +101,8 @@ public class RedisChatMemory implements AgentChatMemory {
             redis.ltrim(key, -limits.maxMessages(), -1);
             redis.expire(key, limits.ttlSeconds());
             persistMessages(conversationId, messages);
-            compactIfNeeded(conversationId, key);
+            // 压缩不在请求路径上做：它要调一次外部模型，会把首字延迟拖慢几秒。
+            // 由 MemoryMaintenanceService 的 @Scheduled 任务按活跃会话扫描触发。
         } catch (RuntimeException e) {
             degrade(e);
             appendLocal(conversationId, messages);
@@ -176,6 +177,22 @@ public class RedisChatMemory implements AgentChatMemory {
             }
         }
         return fromStore;
+    }
+
+    /**
+     * 后台触发压缩：Redis 不可用/压缩器缺失时直接跳过，不抛异常。
+     * 真正的压缩逻辑仍走 {@link #compactIfNeeded}（含分布式锁与失败截断）。
+     */
+    @Override
+    public void compact(String conversationId) {
+        if (!StringUtils.hasText(conversationId) || isDegraded() || compressor == null) {
+            return;
+        }
+        try {
+            compactIfNeeded(conversationId, messageKey(conversationId));
+        } catch (RuntimeException e) {
+            degrade(e);
+        }
     }
 
     /**

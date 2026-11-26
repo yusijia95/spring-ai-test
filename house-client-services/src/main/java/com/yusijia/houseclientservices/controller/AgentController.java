@@ -124,6 +124,8 @@ public class AgentController {
         if (!StringUtils.hasText(request.conversationId())) {
             log.info("agent chat: 请求未带 conversationId，已新建会话 id={} userId={}", conversationId, user.userId());
         }
+        // 首轮补标题（幂等：已有标题不覆盖）。前端会话列表优先展示 title，没有才退回相对时间。
+        conversationService.ensureTitle(user, conversationId, request.message());
 
         // A2：把 userId 编码进 conversationId（复合键 userId:cid），
         // 随 ChatMemory.CONVERSATION_ID 参数传入 advisor，Redis key 自动带 userId 命名空间。

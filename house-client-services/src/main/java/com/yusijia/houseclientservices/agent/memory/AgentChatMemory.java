@@ -19,4 +19,12 @@ public interface AgentChatMemory extends ChatMemory {
      * @return 更早对话的摘要；没有摘要时返回 null
      */
     String digest(String conversationId);
+
+    /**
+     * 触发一次窗口压缩（超字符预算时把最旧一段压成摘要）。
+     * <p>
+     * 由后台定时任务调用，不在请求路径上执行：压缩要调一次外部模型，
+     * 同步做会把首字延迟拖慢几秒。不超预算时只读一次窗口，开销很小。
+     */
+    void compact(String conversationId);
 }

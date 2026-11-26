@@ -43,12 +43,31 @@ class RedisChatMemoryTest {
     }
 
     @Test
+    void 写入不再同步压缩_由后台任务触发() {
+        RedisChatMemory memory = memory(40, 60, 2);
+        compressor.reply = (previous, messages) -> "客户在看 A 楼盘";
+        memory.add("u1:c1", new UserMessage("一".repeat(40)));
+        memory.add("u1:c1", new UserMessage("二".repeat(40)));
+        memory.add("u1:c1", new UserMessage("三".repeat(40)));
+
+        // 请求路径不压缩：写入后窗口仍是 3 条、摘要尚未生成，不阻塞本轮回答
+        assertNull(digestStore.latest("u1:c1"));
+        assertEquals(3, memory.get("u1:c1").size());
+
+        // 后台任务触发后才压缩
+        memory.compact("u1:c1");
+        assertEquals("客户在看 A 楼盘", digestStore.latest("u1:c1"));
+        assertEquals(2, memory.get("u1:c1").size());
+    }
+
+    @Test
     void 字符超预算时压缩最旧的一段并保留最近对话() {
         RedisChatMemory memory = memory(40, 60, 2);
         compressor.reply = (previous, messages) -> "客户在看 A 楼盘 101 室";
         memory.add("u1:c1", new UserMessage("一".repeat(40)));
         memory.add("u1:c1", new UserMessage("二".repeat(40)));
         memory.add("u1:c1", new UserMessage("三".repeat(40)));
+        memory.compact("u1:c1");
 
         assertEquals("客户在看 A 楼盘 101 室", digestStore.latest("u1:c1"));
         assertEquals("客户在看 A 楼盘 101 室", redis.strings.get("chat:{u1:c1}:digest"));
@@ -64,6 +83,7 @@ class RedisChatMemoryTest {
         memory.add("u1:c1", new UserMessage("我的证件号是 330102199001011234，电话 13812345678。" + "补".repeat(20)));
         memory.add("u1:c1", new UserMessage("二".repeat(40)));
         memory.add("u1:c1", new UserMessage("三".repeat(40)));
+        memory.compact("u1:c1");
 
         String stored = digestStore.latest("u1:c1");
         assertNotNull(stored);
@@ -84,6 +104,7 @@ class RedisChatMemoryTest {
         memory.add("u1:c1", new UserMessage("我的证件号是 330102199001011234。" + "补".repeat(20)));
         memory.add("u1:c1", new UserMessage("二".repeat(40)));
         memory.add("u1:c1", new UserMessage("三".repeat(40)));
+        memory.compact("u1:c1");
 
         String seenByModel = digestStore.latest("u1:c1");
         assertNotNull(seenByModel);
@@ -98,6 +119,7 @@ class RedisChatMemoryTest {
         memory.add("u1:c1", new UserMessage("一".repeat(40)));
         memory.add("u1:c1", new UserMessage("二".repeat(40)));
         memory.add("u1:c1", new UserMessage("三".repeat(40)));
+        memory.compact("u1:c1");
 
         assertNull(digestStore.latest("u1:c1"));
         assertEquals(2, memory.get("u1:c1").size());
@@ -112,6 +134,7 @@ class RedisChatMemoryTest {
         memory.add("u1:c1", new UserMessage("一".repeat(40)));
         memory.add("u1:c1", new UserMessage("二".repeat(40)));
         memory.add("u1:c1", new UserMessage("三".repeat(40)));
+        memory.compact("u1:c1");
 
         assertNull(digestStore.latest("u1:c1"));
         assertEquals(3, memory.get("u1:c1").size());
