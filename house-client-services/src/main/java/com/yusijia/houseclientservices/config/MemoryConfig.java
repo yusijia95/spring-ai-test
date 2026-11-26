@@ -6,9 +6,11 @@ import com.yusijia.houseclientservices.agent.memory.AgentChatMemory;
 import com.yusijia.houseclientservices.agent.memory.ChatDigestStore;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryLimits;
+import com.yusijia.houseclientservices.agent.memory.ChatMessageStore;
 import com.yusijia.houseclientservices.agent.memory.SessionStateStore;
 import com.yusijia.houseclientservices.agent.memory.llm.LlmChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatDigestStore;
+import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatMessageStore;
 import com.yusijia.houseclientservices.agent.memory.redis.ChatMessageCodec;
 import com.yusijia.houseclientservices.agent.memory.redis.JedisRedisOperations;
 import com.yusijia.houseclientservices.agent.memory.redis.RedisChatMemory;
@@ -102,6 +104,15 @@ public class MemoryConfig {
         return new PostgresChatDigestStore(chatDigestDataSource);
     }
 
+    /**
+     * 原始消息持久化（工作记忆的权威副本）。
+     * 和摘要共用同一个 PG 池：同一个库、同样的连接生命周期，将来迁库一起走。
+     */
+    @Bean
+    public ChatMessageStore chatMessageStore(PostgresDataSource chatDigestDataSource) {
+        return new PostgresChatMessageStore(chatDigestDataSource);
+    }
+
     @Bean
     public ChatMessageCodec chatMessageCodec() {
         return new ChatMessageCodec();
@@ -136,15 +147,16 @@ public class MemoryConfig {
     public AgentChatMemory chatMemory(RedisOperations redisOperations,
                                       ChatMessageCodec chatMessageCodec,
                                       ChatDigestStore chatDigestStore,
+                                      ChatMessageStore chatMessageStore,
                                       ChatMemoryCompressor compressor,
                                       @Value("${agent.memory.max-messages:40}") int maxMessages,
                                       @Value("${agent.memory.max-chars:6000}") int maxChars,
                                       @Value("${agent.memory.keep-recent:20}") int keepRecent,
                                       @Value("${agent.memory.ttl-seconds:86400}") long ttlSeconds,
                                       @Value("${agent.memory.compress.lock-ttl-ms:5000}") long lockTtlMillis) {
-        log.info("对话记忆: Redis 工作记忆(maxMessages={}, maxChars={}, keepRecent={}) + PG 摘要，压缩器={}",
+        log.info("对话记忆: Redis 工作记忆(maxMessages={}, maxChars={}, keepRecent={}) + PG 原始消息 + PG 摘要，压缩器={}",
                 maxMessages, maxChars, keepRecent, compressor.getClass().getSimpleName());
-        return new RedisChatMemory(redisOperations, chatMessageCodec, chatDigestStore, compressor,
-                new ChatMemoryLimits(maxMessages, maxChars, keepRecent, ttlSeconds, lockTtlMillis));
+        return new RedisChatMemory(redisOperations, chatMessageCodec, chatDigestStore, chatMessageStore,
+                compressor, new ChatMemoryLimits(maxMessages, maxChars, keepRecent, ttlSeconds, lockTtlMillis));
     }
 }

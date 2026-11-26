@@ -34,3 +34,8 @@ build/
 
 ### Deepwork state ###
 .slim/deepwork/
+
+### 本地运行产物（启动日志、依赖 classpath、Vite dev 输出）###
+run*.log
+vite-dev.log
+house-client-services/cp.txt

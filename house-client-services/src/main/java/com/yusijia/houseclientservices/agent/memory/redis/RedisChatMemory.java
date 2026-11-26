@@ -4,6 +4,7 @@ import com.yusijia.houseclientservices.agent.memory.AgentChatMemory;
 import com.yusijia.houseclientservices.agent.memory.ChatDigestStore;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryLimits;
+import com.yusijia.houseclientservices.agent.memory.ChatMessageStore;
 import com.yusijia.houseclientservices.security.PiiMasker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,10 +32,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>写入只 {@code RPUSH}，不依赖读结果 → <b>不需要 conversationId 锁</b>；</li>
  *   <li>{@code LTRIM} 保留最近 maxMessages 条，TTL 到期自动回收；</li>
  *   <li>字符数超预算时把最旧的一段压成摘要（写 PG + Redis），失败则退回截断；</li>
- *   <li>Redis 不可用时自动降级为进程内窗口，聊天不会 500。</li>
+ *   <li>原始消息同步落 PG（{@link ChatMessageStore}），Redis 只是读缓存；</li>
+ *   <li>Redis 不可用时自动降级：仍写 PG，读时从 PG 回源，聊天不会 500。</li>
  * </ul>
  * Key 统一带 {@code {cid}} 哈希标签：将来换 Redis Cluster 时同一会话的 key 落在同一 slot。
- * A2 起 key 带 userId 命名空间：{@code chat:{userId}:{cid}:...}，按用户清理和审计更方便。
+ * A2 起 key 带 userId 命名空间：{@code chat:{userId:cid}:...}，按用户清理和审计更方便。
  */
 public class RedisChatMemory implements AgentChatMemory {
 
@@ -47,20 +49,22 @@ public class RedisChatMemory implements AgentChatMemory {
     private final RedisOperations redis;
     private final ChatMessageCodec codec;
     private final ChatDigestStore digestStore;
+    private final ChatMessageStore messageStore;
     private final ChatMemoryCompressor compressor;
     private final ChatMemoryLimits limits;
 
-    /** Redis 不可用时的兜底窗口（单实例语义，不跨实例共享） */
+    /** Redis 不可用时的兜底窗口（单实例语义，不跨实例共享；PG 才是权威副本） */
     private final Map<String, Deque<Message>> localWindow = new ConcurrentHashMap<>();
 
     private volatile long degradedUntil;
 
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
-                           ChatDigestStore digestStore, ChatMemoryCompressor compressor,
-                           ChatMemoryLimits limits) {
+                           ChatDigestStore digestStore, ChatMessageStore messageStore,
+                           ChatMemoryCompressor compressor, ChatMemoryLimits limits) {
         this.redis = redis;
         this.codec = codec;
         this.digestStore = digestStore;
+        this.messageStore = messageStore;
         this.compressor = compressor;
         this.limits = limits;
     }
@@ -87,6 +91,8 @@ public class RedisChatMemory implements AgentChatMemory {
         }
         if (isDegraded()) {
             appendLocal(conversationId, messages);
+            // Redis 已熔断：PG 是唯一落盘路径，否则这段对话彻底丢失
+            persistMessages(conversationId, messages);
             return;
         }
         String key = messageKey(conversationId);
@@ -94,10 +100,12 @@ public class RedisChatMemory implements AgentChatMemory {
             redis.rpush(key, payload.toArray(new String[0]));
             redis.ltrim(key, -limits.maxMessages(), -1);
             redis.expire(key, limits.ttlSeconds());
+            persistMessages(conversationId, messages);
             compactIfNeeded(conversationId, key);
         } catch (RuntimeException e) {
             degrade(e);
             appendLocal(conversationId, messages);
+            persistMessages(conversationId, messages);
         }
     }
 
@@ -107,13 +115,22 @@ public class RedisChatMemory implements AgentChatMemory {
             return List.of();
         }
         if (isDegraded()) {
-            return localSnapshot(conversationId);
+            return loadFromStoreIfLocalEmpty(conversationId);
         }
         try {
-            return decode(redis.lrange(messageKey(conversationId), 0, -1));
+            List<Message> window = decode(redis.lrange(messageKey(conversationId), 0, -1));
+            if (!window.isEmpty()) {
+                return window;
+            }
+            // Redis 窗口空了（TTL 到期 / 换实例 / 首次冷启动）→ 从 PG 重建
+            List<Message> fromStore = messageStore.recent(conversationId, limits.maxMessages());
+            if (!fromStore.isEmpty()) {
+                backfill(conversationId, fromStore);
+            }
+            return fromStore;
         } catch (RuntimeException e) {
             degrade(e);
-            return localSnapshot(conversationId);
+            return loadFromStoreIfLocalEmpty(conversationId);
         }
     }
 
@@ -130,8 +147,9 @@ public class RedisChatMemory implements AgentChatMemory {
         } catch (RuntimeException e) {
             degrade(e);
         }
-        // 摘要也要清：否则 clear 之后 digest() 会从 PG 把旧摘要读回来（记忆"复活"）
+        // 摘要和原始消息都要清：否则 clear 之后 get()/digest() 会从 PG 把它们读回来（记忆"复活"）
         digestStore.delete(conversationId);
+        messageStore.delete(conversationId);
     }
 
     @Override
@@ -253,6 +271,57 @@ public class RedisChatMemory implements AgentChatMemory {
             });
         }
         return masked;
+    }
+
+    /** 原始消息落 PG（失败由 store 内部吞掉并 warn，不影响本轮回答） */
+    private void persistMessages(String conversationId, List<Message> messages) {
+        messageStore.append(conversationId, scopeUser(conversationId), messages);
+    }
+
+    /** 从作用域键 {@code userId:cid} 取出 userId；没有前缀时返回空串 */
+    private static String scopeUser(String scopedConversationId) {
+        int idx = scopedConversationId.indexOf(':');
+        return idx > 0 ? scopedConversationId.substring(0, idx) : "";
+    }
+
+    /**
+     * PG 回源后回填 Redis 缓存。
+     * 回填前再看一眼 llen：并发请求可能已经填过了，重复 RPUSH 会让消息翻倍。
+     */
+    private void backfill(String conversationId, List<Message> messages) {
+        try {
+            String key = messageKey(conversationId);
+            if (redis.llen(key) > 0) {
+                return;
+            }
+            List<String> payload = new ArrayList<>(messages.size());
+            for (Message message : messages) {
+                String encoded = codec.encode(message);
+                if (encoded != null) {
+                    payload.add(encoded);
+                }
+            }
+            if (payload.isEmpty()) {
+                return;
+            }
+            redis.rpush(key, payload.toArray(new String[0]));
+            redis.expire(key, limits.ttlSeconds());
+            log.info("工作记忆已从 PG 回填: conversationId={}, 条数={}", conversationId, payload.size());
+        } catch (RuntimeException e) {
+            degrade(e);
+        }
+    }
+
+    /**
+     * 降级态读取：本地窗口优先（本轮刚写的），没有再回源 PG（跨实例/重启后的历史）。
+     * 顺序不能反——本地窗口里有 PG 还没写入的消息（降级瞬间的那一轮）。
+     */
+    private List<Message> loadFromStoreIfLocalEmpty(String conversationId) {
+        List<Message> local = localSnapshot(conversationId);
+        if (!local.isEmpty()) {
+            return local;
+        }
+        return messageStore.recent(conversationId, limits.maxMessages());
     }
 
     private void appendLocal(String conversationId, List<Message> messages) {

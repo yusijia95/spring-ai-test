@@ -197,11 +197,52 @@ async function loadConversations() {
 // 1) conversationId 有值且命中列表 → 高亮；
 // 2) 否则取 updatedAt 最新的一条（后端已倒序）；
 // 3) 都没有（从未聊过）→ 空，不选任何会话。
-function selectCurrentFromList() {
+async function selectCurrentFromList() {
   const restored = conversationId.value
     ? conversations.value.find(item => String(item.id) === conversationId.value)
     : null
-  conversationId.value = restored ? String(restored.id) : (conversations.value[0] ? String(conversations.value[0].id) : '')
+  const nextId = restored
+    ? String(restored.id)
+    : (conversations.value[0] ? String(conversations.value[0].id) : '')
+  conversationId.value = nextId
+  if (!nextId) {
+    return
+  }
+  localStorage.setItem(CURRENT_KEY, nextId)
+  // 刚聊完的会话（messages 里已有对话）不要被历史覆盖：
+  // 服务端落库可能比前端渲染慢一拍，用历史盖回去会丢掉刚收到的回复。
+  if (messages.value.length > 1) {
+    messagesCache[nextId] = messages.value
+    return
+  }
+  const history = await loadHistory(nextId)
+  if (history && history.length && conversationId.value === nextId) {
+    messages.value = history
+    stickToBottom.value = true
+    scrollToBottom(true)
+  }
+}
+
+/**
+ * 从 PG 拉历史消息（Redis TTL 到期后仍能还原）。
+ * 失败返回 null，调用方保留现有视图，不把"加载失败"显示成"没有历史"。
+ */
+async function loadHistory(idStr) {
+  if (!token.value) {
+    return null
+  }
+  try {
+    const response = await fetch(
+      `/api/agent/conversations/${encodeURIComponent(idStr)}/messages?limit=100`,
+      { headers: authHeaders() },
+    )
+    if (!response.ok) {
+      return null
+    }
+    return await response.json()
+  } catch (error) {
+    return null
+  }
 }
 
 function currentConversation() {
@@ -256,9 +297,20 @@ async function openConversation(id) {
   conversationId.value = idStr
   localStorage.setItem(CURRENT_KEY, idStr)
   const cached = messagesCache[idStr]
-  messages.value = cached || [welcomeMessage()]
   if (cached) {
+    messages.value = cached
     delete messagesCache[idStr]
+  } else {
+    // 内存里没有这个会话（刷新过页面 / 换设备 / Redis 已过期）：从 PG 拉历史
+    messages.value = [welcomeMessage()]
+    const history = await loadHistory(idStr)
+    // 等待期间用户可能又切走了：只有仍停在这个会话时才覆盖视图
+    if (conversationId.value !== idStr) {
+      return
+    }
+    if (history && history.length) {
+      messages.value = history
+    }
   }
   stickToBottom.value = true
   scrollToBottom(true)
@@ -414,7 +466,7 @@ async function sendMessage() {
     // 刷新列表并选中它，让左侧列表立刻出现这个会话（updatedAt 最新，排最前）。
     if (!cid) {
       await loadConversations()
-      selectCurrentFromList()
+      await selectCurrentFromList()
     }
     await scrollToBottom()
   }
@@ -457,7 +509,7 @@ onMounted(async () => {
         conversationId.value = localStorage.getItem(CURRENT_KEY) || ''
         await loadSubscriptions()
         await loadConversations()
-        selectCurrentFromList()
+        await selectCurrentFromList()
         return
       }
       token.value = ''

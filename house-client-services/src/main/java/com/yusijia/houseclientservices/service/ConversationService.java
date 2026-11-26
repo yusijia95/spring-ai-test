@@ -1,6 +1,7 @@
 package com.yusijia.houseclientservices.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.yusijia.houseclientservices.domain.entity.Conversation;
 import com.yusijia.houseclientservices.mapper.ConversationMapper;
 import com.yusijia.houseclientservices.security.AccessDeniedException;
@@ -48,6 +49,9 @@ public class ConversationService {
     public String getOrCreate(UserContext user, String conversationId) {
         if (StringUtils.hasText(conversationId)) {
             assertOwned(user, conversationId);
+            // 会话列表按 updated_at 倒序，已有会话必须在这里刷新活跃时间，
+            // 否则用户天天聊的会话永远排在"按创建时间"的位置，不会浮到最前。
+            touch(user, conversationId);
             return conversationId;
         }
         Conversation created = new Conversation();
@@ -55,6 +59,35 @@ public class ConversationService {
         created.setStatus(STATUS_ACTIVE);
         conversationMapper.insert(created);
         return String.valueOf(created.getId());
+    }
+
+    /**
+     * 刷新会话活跃时间（updated_at 带 ON UPDATE CURRENT_TIMESTAMP(3)，任意字段更新即可触发）。
+     * <p>
+     * 只更新 owner_user_id 匹配的行：这里再做一次归属断言，避免 touch 成为越权写入的口子。
+     * 非雪花 id（早期 UUID 会话）不在表里，静默跳过。
+     */
+    public void touch(UserContext user, String conversationId) {
+        Long id = parseSnowflake(conversationId);
+        if (id == null) {
+            return;
+        }
+        conversationMapper.update(null, new LambdaUpdateWrapper<Conversation>()
+                .eq(Conversation::getId, id)
+                .eq(Conversation::getOwnerUserId, user.userId())
+                .setSql("updated_at = CURRENT_TIMESTAMP(3)"));
+    }
+
+    /** 雪花 id 解析；不是纯数字（老 UUID 会话）返回 null */
+    private static Long parseSnowflake(String conversationId) {
+        if (!StringUtils.hasText(conversationId)) {
+            return null;
+        }
+        try {
+            return Long.parseLong(conversationId.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** 校验 conversationId 归当前用户所有，否则 403。 */
