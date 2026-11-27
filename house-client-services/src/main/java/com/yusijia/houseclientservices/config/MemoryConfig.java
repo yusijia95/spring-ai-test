@@ -12,8 +12,10 @@ import com.yusijia.houseclientservices.agent.memory.UserProfileStore;
 import com.yusijia.houseclientservices.agent.memory.ProfileExtractor;
 import com.yusijia.houseclientservices.agent.memory.llm.LlmChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.llm.LlmProfileExtractor;
+import com.yusijia.houseclientservices.agent.memory.FeedbackStore;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatDigestStore;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatMessageStore;
+import com.yusijia.houseclientservices.agent.memory.postgres.PostgresFeedbackStore;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresUserProfileStore;
 import com.yusijia.houseclientservices.agent.memory.redis.ChatMessageCodec;
 import com.yusijia.houseclientservices.agent.memory.redis.JedisRedisOperations;
@@ -126,6 +128,14 @@ public class MemoryConfig {
     @Bean
     public UserProfileStore userProfileStore(PostgresDataSource chatDigestDataSource) {
         return new PostgresUserProfileStore(chatDigestDataSource);
+    }
+
+    /**
+     * 反馈存储（P1-3）：点踩记录 → golden set 候选队列。
+     */
+    @Bean
+    public FeedbackStore feedbackStore(PostgresDataSource chatDigestDataSource) {
+        return new PostgresFeedbackStore(chatDigestDataSource);
     }
 
     @Bean

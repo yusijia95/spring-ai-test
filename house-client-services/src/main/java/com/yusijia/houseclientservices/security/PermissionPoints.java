@@ -62,4 +62,15 @@ public final class PermissionPoints {
      * 画像值全部脱敏显示（PiiMasker.maskForStorage），不返回明文。
      */
     public static final String DATA_PROFILE_READ = "data:profile:read";
+
+    // ---- 反馈（P1-3） ----
+    /**
+     * 提交对话反馈（点赞/点踩，两种角色都有）。
+     */
+    public static final String FEEDBACK_SUBMIT = "feedback:submit";
+
+    /**
+     * 查询点踩记录（仅坐席，用于 golden set 候选队列）。
+     */
+    public static final String FEEDBACK_BAD_READ = "feedback:bad:read";
 }
