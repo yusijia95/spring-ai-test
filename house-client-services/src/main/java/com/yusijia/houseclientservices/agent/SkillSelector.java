@@ -78,47 +78,53 @@ public class SkillSelector {
      * @return 选中的技能列表，可能为空（表示只发 COMMON），不会为 null
      */
     public List<Skill> select(String conversationId, String message) {
+        return select(conversationId, message, null);
+    }
+
+    /**
+     * 根据消息选择本轮技能集合（灰度感知）。
+     *
+     * @param userId 当前用户 ID（null 时走基础版本）
+     */
+    public List<Skill> select(String conversationId, String message, String userId) {
         // message 为空 → 返回全部
         if (message == null || message.isBlank()) {
-            return catalog.all();
+            return catalog.all(userId);
         }
 
         try {
             String rawOutput = skillSelectorChatClient.prompt()
                     .system(SYSTEM_PROMPT)
-                    .user(catalog.index() + "\n\n用户最新一句话：" + message)
+                    .user(catalog.index(userId) + "\n\n用户最新一句话：" + message)
                     .call()
                     .content();
 
             log.debug("意图选择器原始输出: [{}]", rawOutput);
 
-            List<String> hitNames = parseNames(rawOutput);
+            List<String> hitNames = parseNames(rawOutput, userId);
             if (!hitNames.isEmpty()) {
                 if (conversationId != null && !conversationId.isBlank()) {
                     lastSelection.put(conversationId, hitNames);
                 }
-                List<Skill> skills = catalog.byNames(hitNames);
+                List<Skill> skills = catalog.byNames(hitNames, userId);
                 log.debug("选中的技能: {}", skills.stream().map(Skill::name).toList());
                 return skills;
             }
         } catch (Exception e) {
             log.warn("意图选择器调用失败，降级返回全部技能: {}", e.getMessage());
-            return catalog.all();
+            return catalog.all(userId);
         }
 
         // 未命中但粘性里有记录（"好的""确认"这类短句靠这个）
         if (conversationId != null && !conversationId.isBlank()) {
             List<String> previous = lastSelection.get(conversationId);
             if (previous != null && !previous.isEmpty()) {
-                List<Skill> skills = catalog.byNames(previous);
+                List<Skill> skills = catalog.byNames(previous, userId);
                 log.debug("使用粘性选择: {}", skills.stream().map(Skill::name).toList());
                 return skills;
             }
         }
 
-        // 完全未命中（开场寒暄、纯应答且无粘性）：本轮不下发任何技能正文，只保留 COMMON。
-        // 这里不再放开全部——寒暄轮带 6 份技能正文等于白烧 4000+ tokens，
-        // 而真正的业务轮会在下一句命中技能。选择器异常走的是上面的 catch 分支，仍返回全部。
         log.debug("意图选择器判定本轮无技能，只下发 COMMON");
         return List.of();
     }
@@ -128,11 +134,15 @@ public class SkillSelector {
      * 使用词边界匹配，避免部分匹配（如 "cancel" 不应匹配 "surroundings" 中不存在的子串）。
      */
     private List<String> parseNames(String output) {
+        return parseNames(output, null);
+    }
+
+    private List<String> parseNames(String output, String userId) {
         List<String> result = new ArrayList<>();
         if (output == null || output.isBlank()) {
             return result;
         }
-        for (Skill skill : catalog.all()) {
+        for (Skill skill : catalog.all(userId)) {
             String name = skill.name();
             Pattern pattern = Pattern.compile("(?<![A-Za-z0-9_-])" + Pattern.quote(name) + "(?![A-Za-z0-9_-])");
             if (pattern.matcher(output).find()) {

@@ -114,7 +114,9 @@ public class AgentController {
         agentChatMemory.compact(scopedConversationId);
 
         // 按选中的技能拼装提示词与工具：没被选中的技能不下发，避免上下文和工具槽位被稀释
-        List<Skill> skills = skillSelector.select(conversationId, request.message());
+        // userId 传入用于灰度路由（同一技能多版本并存时按 userId 决定走哪个版本）
+        List<Skill> skills = skillSelector.select(conversationId, request.message(),
+                String.valueOf(user.userId()));
 
         // 联网检索由系统主导：先规划出多条 query 并发检索，模型只负责依据资料作答。
         // 规划失败或不需要检索时（空列表），退回"模型自己调 webSearch"的旧路径。
