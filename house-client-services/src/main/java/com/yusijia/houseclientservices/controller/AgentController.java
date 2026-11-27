@@ -6,7 +6,6 @@ import com.yusijia.houseclientservices.agent.Skill;
 import com.yusijia.houseclientservices.agent.SkillSelector;
 import com.yusijia.houseclientservices.agent.ToolRegistry;
 import com.yusijia.houseclientservices.agent.memory.AgentChatMemory;
-import com.yusijia.houseclientservices.agent.memory.ChatMessageStore;
 import com.yusijia.houseclientservices.controller.dto.ChatRequest;
 import com.yusijia.houseclientservices.security.Authorization;
 import com.yusijia.houseclientservices.security.PermissionPoints;
@@ -28,14 +27,10 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
@@ -62,7 +57,6 @@ public class AgentController {
     private final SessionStateTools sessionStateTools;
     private final ConversationService conversationService;
     private final AgentAuditService agentAuditService;
-    private final ChatMessageStore chatMessageStore;
     private final String chatModel;
 
     public AgentController(@Qualifier("houseServiceChatClient") ChatClient houseServiceChatClient,
@@ -75,7 +69,6 @@ public class AgentController {
                            SessionStateTools sessionStateTools,
                            ConversationService conversationService,
                            AgentAuditService agentAuditService,
-                           ChatMessageStore chatMessageStore,
                            @Value("${agent.chat.model:qwen-max}") String chatModel) {
         this.houseServiceChatClient = houseServiceChatClient;
         this.projectTools = projectTools;
@@ -87,27 +80,7 @@ public class AgentController {
         this.sessionStateTools = sessionStateTools;
         this.conversationService = conversationService;
         this.agentAuditService = agentAuditService;
-        this.chatMessageStore = chatMessageStore;
         this.chatModel = chatModel;
-    }
-
-    /**
-     * 历史会话回看：从 PG 读原始消息，不受 Redis TTL 影响。
-     * <p>
-     * 前端点开侧边栏的历史会话时调用，直接渲染气泡，不用"先发一句话才看到历史"。
-     * 只返回最近 {@code limit} 条（默认 50，上限 200）：完整翻页交给将来的分页参数，
-     * 一次拉太多既浪费带宽也会把前端渲染拖慢。
-     */
-    @GetMapping("/conversations/{conversationId}/messages")
-    public ResponseEntity<List<ChatMessageStore.StoredMessage>> history(
-            @PathVariable String conversationId,
-            @RequestParam(defaultValue = "50") int limit,
-            HttpServletRequest http) {
-        UserContext user = Authorization.requirePermission(http, PermissionPoints.CHAT_CONVERSATION);
-        conversationService.assertOwned(user, conversationId);
-        int safeLimit = Math.min(Math.max(limit, 1), 200);
-        String scoped = user.userId() + ":" + conversationId;
-        return ResponseEntity.ok(chatMessageStore.recentWithTime(scoped, safeLimit));
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -131,6 +104,10 @@ public class AgentController {
         // 随 ChatMemory.CONVERSATION_ID 参数传入 advisor，Redis key 自动带 userId 命名空间。
         // 不用实例字段（volatile / ConcurrentHashMap）：singleton Bean 并发下要么互相覆盖、要么无 TTL OOM。
         String scopedConversationId = user.userId() + ":" + conversationId;
+
+        // 请求前软检查：窗口超字符预算时同步压缩一次，防止连续快速对话在两轮定时任务之间
+        // 把上下文撑爆。不超预算时只读一次窗口（LRANGE），开销极小；抢不到锁就跳过，不阻塞本轮。
+        agentChatMemory.compact(scopedConversationId);
 
         // 按选中的技能拼装提示词与工具：没被选中的技能不下发，避免上下文和工具槽位被稀释
         List<Skill> skills = skillSelector.select(conversationId, request.message());

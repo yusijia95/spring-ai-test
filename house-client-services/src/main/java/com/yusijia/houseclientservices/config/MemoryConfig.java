@@ -149,9 +149,9 @@ public class MemoryConfig {
                                       ChatDigestStore chatDigestStore,
                                       ChatMessageStore chatMessageStore,
                                       ChatMemoryCompressor compressor,
-                                      @Value("${agent.memory.max-messages:40}") int maxMessages,
-                                      @Value("${agent.memory.max-chars:6000}") int maxChars,
-                                      @Value("${agent.memory.keep-recent:20}") int keepRecent,
+                                      @Value("${agent.memory.max-messages:80}") int maxMessages,
+                                      @Value("${agent.memory.max-chars:20000}") int maxChars,
+                                      @Value("${agent.memory.keep-recent:40}") int keepRecent,
                                       @Value("${agent.memory.ttl-seconds:86400}") long ttlSeconds,
                                       @Value("${agent.memory.compress.lock-ttl-ms:5000}") long lockTtlMillis) {
         log.info("对话记忆: Redis 工作记忆(maxMessages={}, maxChars={}, keepRecent={}) + PG 原始消息 + PG 摘要，压缩器={}",

@@ -111,4 +111,24 @@ public class JedisRedisOperations implements RedisOperations {
             jedis.del(key);
         }
     }
+
+    @Override
+    public long rpushAndTrimAndExpire(String key, String[] values, long keepLast, long ttlSeconds) {
+        try (Jedis jedis = pool.getResource()) {
+            // Jedis 5.x: multi() 返回 Transaction，命令通过 Transaction 入队，exec() 原子执行
+            var txn = jedis.multi();
+            txn.rpush(key, values);
+            txn.ltrim(key, -keepLast, -1);
+            txn.expire(key, ttlSeconds);
+            var results = txn.exec();
+            // results[0] 是 RPUSH 返回的 list 长度
+            if (results != null && !results.isEmpty()) {
+                Object first = results.get(0);
+                if (first instanceof Long l) {
+                    return l;
+                }
+            }
+            return -1;
+        }
+    }
 }

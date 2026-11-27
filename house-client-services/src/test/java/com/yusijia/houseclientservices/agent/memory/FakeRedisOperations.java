@@ -139,4 +139,19 @@ public class FakeRedisOperations implements RedisOperations {
         strings.remove(key);
         hashes.remove(key);
     }
+
+    @Override
+    public long rpushAndTrimAndExpire(String key, String[] values, long keepLast, long ttlSeconds) {
+        check();
+        List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
+        for (String value : values) {
+            list.add(value);
+        }
+        if (list.size() > keepLast) {
+            int from = (int) (list.size() - keepLast);
+            List<String> trimmed = new ArrayList<>(list.subList(from, list.size()));
+            lists.put(key, trimmed);
+        }
+        return list.size();
+    }
 }

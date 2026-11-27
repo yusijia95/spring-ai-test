@@ -56,7 +56,12 @@ public class RedisChatMemory implements AgentChatMemory {
     /** Redis 不可用时的兜底窗口（单实例语义，不跨实例共享；PG 才是权威副本） */
     private final Map<String, Deque<Message>> localWindow = new ConcurrentHashMap<>();
 
+    /** localWindow 容量上限：防止 Redis 长时间断联时 OOM。超出时淘汰最久未访问的会话。 */
+    private static final int LOCAL_WINDOW_MAX_CONVERSATIONS = 1000;
+
     private volatile long degradedUntil;
+    /** 记录 localWindow 各会话最后访问时间（用于 LRU 淘汰） */
+    private final Map<String, Long> localWindowAccess = new ConcurrentHashMap<>();
 
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
                            ChatDigestStore digestStore, ChatMessageStore messageStore,
@@ -97,9 +102,10 @@ public class RedisChatMemory implements AgentChatMemory {
         }
         String key = messageKey(conversationId);
         try {
-            redis.rpush(key, payload.toArray(new String[0]));
-            redis.ltrim(key, -limits.maxMessages(), -1);
-            redis.expire(key, limits.ttlSeconds());
+            // MULTI/EXEC 原子写入：RPUSH + LTRIM + EXPIRE 一次事务，
+            // 避免 rpush 成功但 ltrim/expire 失败时窗口超上限或 key 永不过期。
+            redis.rpushAndTrimAndExpire(key, payload.toArray(new String[0]),
+                    limits.maxMessages(), limits.ttlSeconds());
             persistMessages(conversationId, messages);
             // 压缩不在请求路径上做：它要调一次外部模型，会把首字延迟拖慢几秒。
             // 由 MemoryMaintenanceService 的 @Scheduled 任务按活跃会话扫描触发。
@@ -141,6 +147,7 @@ public class RedisChatMemory implements AgentChatMemory {
             return;
         }
         localWindow.remove(conversationId);
+        localWindowAccess.remove(conversationId);
         try {
             redis.del(messageKey(conversationId));
             redis.del(digestKey(conversationId));
@@ -321,8 +328,8 @@ public class RedisChatMemory implements AgentChatMemory {
             if (payload.isEmpty()) {
                 return;
             }
-            redis.rpush(key, payload.toArray(new String[0]));
-            redis.expire(key, limits.ttlSeconds());
+            redis.rpushAndTrimAndExpire(key, payload.toArray(new String[0]),
+                    limits.maxMessages(), limits.ttlSeconds());
             log.info("工作记忆已从 PG 回填: conversationId={}, 条数={}", conversationId, payload.size());
         } catch (RuntimeException e) {
             degrade(e);
@@ -342,7 +349,9 @@ public class RedisChatMemory implements AgentChatMemory {
     }
 
     private void appendLocal(String conversationId, List<Message> messages) {
+        evictLocalWindowIfNeeded();
         Deque<Message> window = localWindow.computeIfAbsent(conversationId, key -> new ArrayDeque<>());
+        localWindowAccess.put(conversationId, System.currentTimeMillis());
         synchronized (window) {
             for (Message message : messages) {
                 window.addLast(message);
@@ -350,6 +359,30 @@ public class RedisChatMemory implements AgentChatMemory {
             while (window.size() > limits.maxMessages()) {
                 window.pollFirst();
             }
+        }
+    }
+
+    /**
+     * localWindow 容量保护：Redis 长时间断联时每个新会话都会创建一个 Deque，
+     * 无上限会 OOM。超出 {@link #LOCAL_WINDOW_MAX_CONVERSATIONS} 时淘汰最久未访问的。
+     */
+    private void evictLocalWindowIfNeeded() {
+        if (localWindow.size() < LOCAL_WINDOW_MAX_CONVERSATIONS) {
+            return;
+        }
+        // 找最久未访问的会话淘汰（O(n) 但 n 很小，且只在超限时触发）
+        String oldest = null;
+        long oldestTime = Long.MAX_VALUE;
+        for (Map.Entry<String, Long> entry : localWindowAccess.entrySet()) {
+            if (entry.getValue() < oldestTime) {
+                oldestTime = entry.getValue();
+                oldest = entry.getKey();
+            }
+        }
+        if (oldest != null) {
+            localWindow.remove(oldest);
+            localWindowAccess.remove(oldest);
+            log.debug("localWindow 已满，淘汰最久未访问会话: {}", oldest);
         }
     }
 

@@ -45,4 +45,14 @@ public interface RedisOperations {
     void hdel(String key, String... fields);
 
     void del(String key);
+
+    /**
+     * MULTI/EXEC 原子写入：RPUSH + LTRIM + EXPIRE 一次事务完成。
+     * <p>
+     * 解决高并发下 rpush 成功但 ltrim/expire 失败时窗口超上限或 key 永不过期的问题。
+     * 单连接、单 RTT，比三次独立调用快且原子。
+     *
+     * @return RPUSH 执行后 list 的长度
+     */
+    long rpushAndTrimAndExpire(String key, String[] values, long keepLast, long ttlSeconds);
 }
