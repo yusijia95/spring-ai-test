@@ -30,6 +30,43 @@ const messagesCache = {}
 // 当前流式请求的 AbortController：切走/新建会话时 abort 旧流，防止回复写错会话。
 let activeController = null
 
+// ---- 用户画像（L3 语义记忆）----
+const profile = ref(null)
+const profileLoading = ref(false)
+const profileOpen = ref(false)
+
+const PROFILE_LABELS = {
+  budget: '预算',
+  districtPref: '意向区域',
+  roomPref: '户型偏好',
+  purpose: '购房目的',
+  other: '其他偏好',
+}
+
+async function loadProfile() {
+  if (!token.value) return
+  profileLoading.value = true
+  try {
+    const response = await fetch('/api/agent/profile', { headers: authHeaders() })
+    if (!response.ok) {
+      profile.value = null
+      return
+    }
+    profile.value = await response.json()
+  } catch (error) {
+    profile.value = null
+  } finally {
+    profileLoading.value = false
+  }
+}
+
+function toggleProfile() {
+  profileOpen.value = !profileOpen.value
+  if (profileOpen.value && !profile.value) {
+    loadProfile()
+  }
+}
+
 // ---- 登录（P0-1 假登录：所有业务接口都要 Authorization: Bearer token）----
 const token = ref(localStorage.getItem('agent.token') || '')
 const authUser = ref(null)
@@ -682,6 +719,19 @@ onUnmounted(() => {
             <button
               type="button"
               class="btn-new-conv"
+              :class="{ 'btn-active': profileOpen }"
+              @click="toggleProfile"
+              aria-label="查看我的画像"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              画像
+            </button>
+            <button
+              type="button"
+              class="btn-new-conv"
               @click="startNewConversation"
               aria-label="新建会话"
             >
@@ -704,6 +754,39 @@ onUnmounted(() => {
             </button>
           </div>
         </header>
+
+        <!-- 画像卡片（L3 语义记忆）：点击头部按钮展开/收起 -->
+        <Transition name="profile-slide">
+          <div v-if="profileOpen" class="profile-card">
+            <div class="profile-header">
+              <span class="profile-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                  <circle cx="12" cy="7" r="4"/>
+                </svg>
+                我的画像
+              </span>
+              <button class="btn-profile-refresh" type="button" @click="loadProfile" :disabled="profileLoading" aria-label="刷新画像">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.5 2v6h-6"/>
+                  <path d="M2.5 22v-6h6"/>
+                  <path d="M2.5 12a10 10 0 0 1 17.5-6.5"/>
+                  <path d="M21.5 12a10 10 0 0 1-17.5 6.5"/>
+                </svg>
+              </button>
+            </div>
+            <div v-if="profileLoading" class="profile-empty">加载中…</div>
+            <div v-else-if="!profile || Object.keys(profile).length === 0" class="profile-empty">
+              暂无画像数据，在对话中提到预算、区域、户型等偏好后会自动记录
+            </div>
+            <ul v-else class="profile-list">
+              <li v-for="(value, key) in profile" :key="key">
+                <span class="profile-key">{{ PROFILE_LABELS[key] || key }}</span>
+                <span class="profile-value">{{ value }}</span>
+              </li>
+            </ul>
+          </div>
+        </Transition>
 
         <!-- 会话列表：一行 chip，当前会话置顶高亮，其余按更新时间倒序 -->
         <div v-if="authUser" class="convs">
@@ -1289,6 +1372,118 @@ onUnmounted(() => {
 .btn-close:hover {
   background: #e4e6ea;
   color: #333;
+}
+
+/* ========== 画像卡片 ========== */
+.profile-card {
+  margin: 0 28px 0;
+  margin-top: -4px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.profile-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.profile-title svg {
+  opacity: 0.6;
+}
+
+.btn-profile-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn-profile-refresh:hover {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.profile-empty {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.profile-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.profile-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.profile-key {
+  color: #64748b;
+  flex-shrink: 0;
+  min-width: 56px;
+}
+
+.profile-value {
+  color: #1e293b;
+  word-break: break-word;
+}
+
+/* 画像按钮激活态 */
+.btn-new-conv.btn-active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+/* 画像卡片展开/收起动画 */
+.profile-slide-enter-active,
+.profile-slide-leave-active {
+  transition: max-height 200ms ease, opacity 200ms ease, margin 200ms ease;
+  overflow: hidden;
+}
+
+.profile-slide-enter-from,
+.profile-slide-leave-to {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.profile-slide-enter-to,
+.profile-slide-leave-from {
+  max-height: 300px;
+  opacity: 1;
 }
 
 /* ========== Messages ========== */
