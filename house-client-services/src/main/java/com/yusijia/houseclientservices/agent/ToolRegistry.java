@@ -5,6 +5,7 @@ import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
 import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
 import com.yusijia.houseclientservices.tool.SessionStateTools;
+import com.yusijia.houseclientservices.tool.UserProfileTools;
 import com.yusijia.houseclientservices.tool.SubscriptionTools;
 import com.yusijia.houseclientservices.tool.ToolExecutionContext;
 import com.yusijia.houseclientservices.tool.WebSearchTools;
@@ -43,6 +44,7 @@ public class ToolRegistry {
                         ProjectTools projectTools,
                         WebSearchTools webSearchTools,
                         SessionStateTools sessionStateTools,
+                        UserProfileTools userProfileTools,
                         ToolCallbackProvider[] mcpToolProviders,
                         SkillCatalog skillCatalog) {
         // MCP 白名单由技能声明推导：SKILL.md 的 tools 里写了哪些，就注册哪些。
@@ -53,7 +55,7 @@ public class ToolRegistry {
         Set<String> dropped = new LinkedHashSet<>();
         // 本地 @Tool 方法
         ToolCallback[] businessCallbacks = MethodToolCallbackProvider.builder()
-                .toolObjects(subscriptionTools, projectTools, webSearchTools, sessionStateTools)
+                .toolObjects(subscriptionTools, projectTools, webSearchTools, sessionStateTools, userProfileTools)
                 .build()
                 .getToolCallbacks();
         for (ToolCallback callback : businessCallbacks) {

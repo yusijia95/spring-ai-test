@@ -8,9 +8,11 @@ import com.yusijia.houseclientservices.agent.memory.ChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryLimits;
 import com.yusijia.houseclientservices.agent.memory.ChatMessageStore;
 import com.yusijia.houseclientservices.agent.memory.SessionStateStore;
+import com.yusijia.houseclientservices.agent.memory.UserProfileStore;
 import com.yusijia.houseclientservices.agent.memory.llm.LlmChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatDigestStore;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatMessageStore;
+import com.yusijia.houseclientservices.agent.memory.postgres.PostgresUserProfileStore;
 import com.yusijia.houseclientservices.agent.memory.redis.ChatMessageCodec;
 import com.yusijia.houseclientservices.agent.memory.redis.JedisRedisOperations;
 import com.yusijia.houseclientservices.agent.memory.redis.RedisChatMemory;
@@ -111,6 +113,15 @@ public class MemoryConfig {
     @Bean
     public ChatMessageStore chatMessageStore(PostgresDataSource chatDigestDataSource) {
         return new PostgresChatMessageStore(chatDigestDataSource);
+    }
+
+    /**
+     * L3 用户画像（语义记忆）：按 userId 持久化在 PG，跨会话共享。
+     * 和摘要/原始消息共用同一个 PG 池。
+     */
+    @Bean
+    public UserProfileStore userProfileStore(PostgresDataSource chatDigestDataSource) {
+        return new PostgresUserProfileStore(chatDigestDataSource);
     }
 
     @Bean

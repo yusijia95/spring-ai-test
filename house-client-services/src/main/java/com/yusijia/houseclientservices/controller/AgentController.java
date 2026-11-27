@@ -6,6 +6,7 @@ import com.yusijia.houseclientservices.agent.Skill;
 import com.yusijia.houseclientservices.agent.SkillSelector;
 import com.yusijia.houseclientservices.agent.ToolRegistry;
 import com.yusijia.houseclientservices.agent.memory.AgentChatMemory;
+import com.yusijia.houseclientservices.agent.memory.UserProfileStore;
 import com.yusijia.houseclientservices.controller.dto.ChatRequest;
 import com.yusijia.houseclientservices.security.Authorization;
 import com.yusijia.houseclientservices.security.PermissionPoints;
@@ -57,6 +58,7 @@ public class AgentController {
     private final SessionStateTools sessionStateTools;
     private final ConversationService conversationService;
     private final AgentAuditService agentAuditService;
+    private final UserProfileStore userProfileStore;
     private final String chatModel;
 
     public AgentController(@Qualifier("houseServiceChatClient") ChatClient houseServiceChatClient,
@@ -69,6 +71,7 @@ public class AgentController {
                            SessionStateTools sessionStateTools,
                            ConversationService conversationService,
                            AgentAuditService agentAuditService,
+                           UserProfileStore userProfileStore,
                            @Value("${agent.chat.model:qwen-max}") String chatModel) {
         this.houseServiceChatClient = houseServiceChatClient;
         this.projectTools = projectTools;
@@ -80,6 +83,7 @@ public class AgentController {
         this.sessionStateTools = sessionStateTools;
         this.conversationService = conversationService;
         this.agentAuditService = agentAuditService;
+        this.userProfileStore = userProfileStore;
         this.chatModel = chatModel;
     }
 
@@ -133,6 +137,12 @@ public class AgentController {
         String sessionBlock = AgentPrompts.sessionBlock(sessionState);
         if (!sessionBlock.isEmpty()) {
             systemPrompt = systemPrompt + "\n" + sessionBlock;
+        }
+        // L3 用户画像：跨会话的长期偏好，每轮注入 system prompt
+        Map<String, String> userProfile = userProfileStore.get(String.valueOf(user.userId()));
+        String profileBlock = AgentPrompts.profileBlock(userProfile);
+        if (!profileBlock.isEmpty()) {
+            systemPrompt = systemPrompt + "\n" + profileBlock;
         }
         String digestBlock = AgentPrompts.digestBlock(agentChatMemory.digest(conversationId));
         if (!digestBlock.isEmpty()) {

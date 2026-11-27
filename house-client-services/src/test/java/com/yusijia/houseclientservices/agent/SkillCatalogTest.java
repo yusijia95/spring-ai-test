@@ -30,7 +30,7 @@ class SkillCatalogTest {
         Skill subscribe = catalog.byNames(List.of("subscribe")).get(0);
 
         assertEquals(List.of("searchHouse", "searchPerson", "searchOrg", "createSubscription",
-                        "rememberSessionFact"),
+                        "rememberSessionFact", "rememberUserProfile"),
                 subscribe.tools());
         assertTrue(subscribe.description().startsWith("客户要办理认购"));
         assertTrue(subscribe.body().startsWith("## 生成认购"));

@@ -1,7 +1,7 @@
 ---
 name: projects
 description: 客户询问某区域有哪些楼盘、住宅、小区，或房价、均价、单价、在售房源、户型、建筑面积时使用。
-tools: searchProjects, searchHouse, rememberSessionFact
+tools: searchProjects, searchHouse, rememberSessionFact, rememberUserProfile
 ---
 ## 楼盘与房价查询
 - 客户询问某区域有哪些楼盘、住宅、小区，或房价、均价、单价、在售房源、户型、面积时，

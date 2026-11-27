@@ -217,6 +217,32 @@ public final class AgentPrompts {
     }
 
     /**
+     * 用户画像区块（L3 语义记忆）。放在 digestBlock 之前：画像是长期事实，优先级高于短期摘要。
+     *
+     * @param profile 用户画像 Map；为空时返回空串
+     */
+    public static String profileBlock(java.util.Map<String, String> profile) {
+        if (profile == null || profile.isEmpty()) {
+            return "";
+        }
+        StringBuilder body = new StringBuilder();
+        for (java.util.Map.Entry<String, String> entry : profile.entrySet()) {
+            if (entry.getValue() != null && !entry.getValue().isBlank()) {
+                body.append("- ").append(entry.getKey()).append('：').append(entry.getValue()).append('\n');
+            }
+        }
+        if (body.isEmpty()) {
+            return "";
+        }
+        return """
+                ## 客户长期画像（系统记录，直接采信）
+                以下是跨会话积累的客户偏好画像。回答时直接参考，不要说"根据记录"。
+                画像与本轮客户说法冲突时，以本轮为准。
+
+                """ + body;
+    }
+
+    /**
      * 多 query 检索完成后的结果区块，拼在技能正文之后。
      * <p>
      * 作用是覆盖技能正文里"先调工具再回答"的流程说明：这一轮检索已由系统按多个角度做完，

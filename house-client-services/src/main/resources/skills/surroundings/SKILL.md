@@ -1,7 +1,7 @@
 ---
 name: surroundings
 description: 客户询问某地址附近有哪些地铁站、公交站、学校、医院、商场、超市、公园、银行等配套设施时使用，即"附近有什么"；不负责"A 到 B 怎么走"的路线规划。
-tools: map_geocode, map_search_places
+tools: map_geocode, map_search_places, rememberUserProfile
 ---
 ## 周边环境查询
 - 本能力只回答**配套设施**：地铁、公交、学校、医院、商场、超市、公园、银行。
