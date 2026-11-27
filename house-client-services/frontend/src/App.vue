@@ -30,6 +30,59 @@ const messagesCache = {}
 // 当前流式请求的 AbortController：切走/新建会话时 abort 旧流，防止回复写错会话。
 let activeController = null
 
+// ---- 反馈（P1-3 反馈闭环）----
+// 每条 assistant 消息的反馈状态：{ [messageIndex]: rating }
+const feedbackState = reactive({})
+const feedbackSending = ref(false)
+
+/**
+ * 计算某条 assistant 消息是第几轮（从 1 开始）。
+ * 遍历 messages 数组，数到当前 index 为止的 assistant 消息数量。
+ */
+function assistantTurn(index) {
+  let turn = 0
+  for (let i = 0; i <= index && i < messages.value.length; i++) {
+    if (messages.value[i].role === 'assistant') turn++
+  }
+  return turn
+}
+
+async function submitFeedback(index, rating) {
+  if (!token.value || !conversationId.value) return
+  // 再次点击同一评级 = 取消反馈（rating 相同则跳过，后端没有删除接口，
+  // 取消时发一条相反评级的记录不语义正确——这里用"已反馈则不可再改"的简单策略）
+  const current = feedbackState[index]
+  if (current === rating) return
+  feedbackSending.value = true
+  try {
+    const turn = assistantTurn(index)
+    const response = await fetch('/api/agent/feedback', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        conversationId: conversationId.value,
+        turn,
+        rating,
+        reason: null,
+      }),
+    })
+    if (response.ok) {
+      feedbackState[index] = rating
+    }
+  } catch (error) {
+    // 反馈失败不阻塞对话
+  } finally {
+    feedbackSending.value = false
+  }
+}
+
+/** 切换会话时清空反馈状态（新会话的消息索引不同） */
+function resetFeedbackState() {
+  for (const key of Object.keys(feedbackState)) {
+    delete feedbackState[key]
+  }
+}
+
 // ---- 用户画像（L3 语义记忆）----
 const profile = ref(null)
 const profileLoading = ref(false)
@@ -242,6 +295,7 @@ async function selectCurrentFromList() {
     ? String(restored.id)
     : (conversations.value[0] ? String(conversations.value[0].id) : '')
   conversationId.value = nextId
+  resetFeedbackState()
   if (!nextId) {
     return
   }
@@ -333,6 +387,7 @@ async function openConversation(id) {
   }
   conversationId.value = idStr
   localStorage.setItem(CURRENT_KEY, idStr)
+  resetFeedbackState()
   const cached = messagesCache[idStr]
   if (cached) {
     messages.value = cached
@@ -363,6 +418,7 @@ function startNewConversation() {
   }
   conversationId.value = ''
   localStorage.removeItem(CURRENT_KEY)
+  resetFeedbackState()
   messages.value = [welcomeMessage()]
   input.value = ''
   stickToBottom.value = true
@@ -834,6 +890,38 @@ onUnmounted(() => {
             <div v-if="msg.role === 'assistant'" class="bubble-content" v-html="markdownMap[index]" />
             <!-- 用户消息：纯文本 -->
             <span v-else>{{ msg.content }}</span>
+            <!-- 反馈按钮：仅 assistant 消息、流式结束后显示 -->
+            <div
+              v-if="msg.role === 'assistant' && !sending && msg.content"
+              class="feedback-bar"
+            >
+              <button
+                type="button"
+                class="feedback-btn"
+                :class="{ active: feedbackState[index] === 1 }"
+                :disabled="feedbackSending"
+                :aria-label="feedbackState[index] === 1 ? '已点赞' : '点赞'"
+                :title="feedbackState[index] === 1 ? '已点赞' : '有帮助'"
+                @click="submitFeedback(index, 1)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="feedback-btn"
+                :class="{ active: feedbackState[index] === -1 }"
+                :disabled="feedbackSending"
+                :aria-label="feedbackState[index] === -1 ? '已点踩' : '点踩'"
+                :title="feedbackState[index] === -1 ? '已点踩' : '需要改进'"
+                @click="submitFeedback(index, -1)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1620,6 +1708,55 @@ onUnmounted(() => {
 .bubble-content :deep(a) {
   color: #2563eb;
   text-decoration: underline;
+}
+
+/* ========== Feedback ========== */
+.feedback-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.bubble.assistant:hover .feedback-bar,
+.feedback-bar:focus-within {
+  opacity: 1;
+}
+
+.feedback-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  padding: 0;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.feedback-btn.active {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.feedback-btn.active:active {
+  background: #dbeafe;
+}
+
+.feedback-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ========== Composer ========== */
