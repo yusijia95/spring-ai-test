@@ -86,4 +86,14 @@ public final class Authorization {
         Set<String> granted = user.isAgent() ? AGENT : CUSTOMER;
         return granted.contains(permission);
     }
+
+    /**
+     * 该用户持有的全部权限点（供 ToolRegistry 按权限过滤工具）。
+     */
+    public static Set<String> userPermissions(UserContext user) {
+        if (user == null) {
+            return Set.of();
+        }
+        return user.isAgent() ? AGENT : CUSTOMER;
+    }
 }

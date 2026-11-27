@@ -153,7 +153,7 @@ public class AgentController {
             systemPrompt = systemPrompt + "\n" + AgentPrompts.retrievalFormatBlock();
         }
 
-        List<ToolCallback> toolCallbacks = toolRegistry.forSkills(skills);
+        List<ToolCallback> toolCallbacks = toolRegistry.forSkills(skills, user);
         if (retrieval != null && !retrieval.isBlank()) {
             // 检索已经做完，把工具摘掉，模型的"要不要再查"决策权在这里被收回
             toolCallbacks = toolCallbacks.stream()

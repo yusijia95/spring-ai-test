@@ -1,6 +1,9 @@
 package com.yusijia.houseclientservices.agent;
 
 import com.yusijia.houseclientservices.domain.audit.ToolCallAudit;
+import com.yusijia.houseclientservices.security.Authorization;
+import com.yusijia.houseclientservices.security.PermissionPoints;
+import com.yusijia.houseclientservices.security.UserContext;
 import com.yusijia.houseclientservices.tool.BaiduMapToolGuard;
 import com.yusijia.houseclientservices.tool.ExternalContentGuard;
 import com.yusijia.houseclientservices.tool.ProjectTools;
@@ -39,6 +42,14 @@ public class ToolRegistry {
 
     /** 会改变业务数据的工具：读过外部不可信内容后本轮直接熔断 */
     private static final Set<String> WRITE_TOOLS = Set.of("createSubscription", "cancelSubscription");
+
+    /** 工具名 → 所需权限点（执行层校验，双保险：技能层不挂 + 执行层拒） */
+    private static final Map<String, String> TOOL_PERMISSIONS = Map.of(
+            "createSubscription", PermissionPoints.SUBSCRIPTION_CREATE,
+            "cancelSubscription", PermissionPoints.SUBSCRIPTION_CANCEL,
+            "searchPerson", PermissionPoints.DATA_PERSON_SEARCH,
+            "searchOrg", PermissionPoints.DATA_ORG_SEARCH
+    );
 
     public ToolRegistry(SubscriptionTools subscriptionTools,
                         ProjectTools projectTools,
@@ -98,20 +109,23 @@ public class ToolRegistry {
     }
 
     /**
-     * 按技能集合取工具。按 skills 顺序取各自 tools() 并集（LinkedHashSet 去重），
-     * 按名字从 byName 取；某个名字查不到则 log.warn 跳过。
+     * 按技能集合 + 用户权限取工具。
      * <p>
-     * <b>空技能列表 = 空工具列表</b>：调用方只有在"模型明确判定本轮无技能"
-     * （纯寒暄/道谢）时才会传空，这时下发任何业务工具都是浪费 schema token，
-     * 还会让模型在寒暄轮里尝试调工具。选择器自身异常时返回的是全量技能，不是空列表。
+     * 两层过滤：
+     * <ol>
+     *   <li>技能层：只挂选中技能声明的工具（少下发 = 少 token = 少误触发）</li>
+     *   <li>权限层：按 {@link #TOOL_PERMISSIONS} 过滤，用户无权限的工具不挂</li>
+     * </ol>
      *
      * @param skills 选中的技能列表
+     * @param user   当前登录用户（null 时不过滤，用于测试）
      * @return 工具回调列表，可能为空
      */
-    public List<ToolCallback> forSkills(List<Skill> skills) {
+    public List<ToolCallback> forSkills(List<Skill> skills, UserContext user) {
         if (skills == null || skills.isEmpty()) {
             return List.of();
         }
+        Set<String> userPerms = user != null ? Authorization.userPermissions(user) : null;
         Set<String> names = new LinkedHashSet<>();
         for (Skill skill : skills) {
             names.addAll(skill.tools());
@@ -119,13 +133,27 @@ public class ToolRegistry {
         List<ToolCallback> selected = new ArrayList<>(names.size());
         for (String name : names) {
             ToolCallback callback = byName.get(name);
-            if (callback != null) {
-                selected.add(callback);
-            } else {
+            if (callback == null) {
                 log.warn("工具未注册: {}（可能该工具已被静态裁剪）", name);
+                continue;
             }
+            // 权限层：工具声明了所需权限点且用户不持有时，不挂该工具
+            if (userPerms != null) {
+                String requiredPerm = TOOL_PERMISSIONS.get(name);
+                if (requiredPerm != null && !userPerms.contains(requiredPerm)) {
+                    log.info("工具 {} 被权限过滤: userId={} role={} 缺 {}",
+                            name, user.userId(), user.role(), requiredPerm);
+                    continue;
+                }
+            }
+            selected.add(callback);
         }
         return selected;
+    }
+
+    /** 兼容旧调用（无权限过滤，用于测试） */
+    public List<ToolCallback> forSkills(List<Skill> skills) {
+        return forSkills(skills, null);
     }
 
     /** 全部已注册工具名，便于排查 */
