@@ -53,4 +53,13 @@ public final class PermissionPoints {
      * 所以只给坐席；坐席按 conversationId 反查"哪一轮、哪些技能、调了什么工具、是否经确认"。
      */
     public static final String AUDIT_READ = "audit:read";
+
+    // ---- 用户画像（L3） ----
+    /**
+     * 查询用户画像（两种角色都有）。
+     * <p>
+     * 数据范围由调用方按角色控制：客户只能查自己，坐席只能查分配给自己的客户。
+     * 画像值全部脱敏显示（PiiMasker.maskForStorage），不返回明文。
+     */
+    public static final String DATA_PROFILE_READ = "data:profile:read";
 }

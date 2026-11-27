@@ -5,6 +5,7 @@ import com.yusijia.houseclientservices.agent.memory.ChatDigestStore;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryCompressor;
 import com.yusijia.houseclientservices.agent.memory.ChatMemoryLimits;
 import com.yusijia.houseclientservices.agent.memory.ChatMessageStore;
+import com.yusijia.houseclientservices.agent.memory.ProfileExtractor;
 import com.yusijia.houseclientservices.security.PiiMasker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +53,8 @@ public class RedisChatMemory implements AgentChatMemory {
     private final ChatMessageStore messageStore;
     private final ChatMemoryCompressor compressor;
     private final ChatMemoryLimits limits;
+    /** 画像提取器（旁路，可为 null 表示不提取） */
+    private final ProfileExtractor profileExtractor;
 
     /** Redis 不可用时的兜底窗口（单实例语义，不跨实例共享；PG 才是权威副本） */
     private final Map<String, Deque<Message>> localWindow = new ConcurrentHashMap<>();
@@ -65,13 +68,22 @@ public class RedisChatMemory implements AgentChatMemory {
 
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
                            ChatDigestStore digestStore, ChatMessageStore messageStore,
-                           ChatMemoryCompressor compressor, ChatMemoryLimits limits) {
+                           ChatMemoryCompressor compressor, ChatMemoryLimits limits,
+                           ProfileExtractor profileExtractor) {
         this.redis = redis;
         this.codec = codec;
         this.digestStore = digestStore;
         this.messageStore = messageStore;
         this.compressor = compressor;
         this.limits = limits;
+        this.profileExtractor = profileExtractor;
+    }
+
+    /** 兼容旧构造器（无画像提取器） */
+    public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
+                           ChatDigestStore digestStore, ChatMessageStore messageStore,
+                           ChatMemoryCompressor compressor, ChatMemoryLimits limits) {
+        this(redis, codec, digestStore, messageStore, compressor, limits, null);
     }
 
     @Override
@@ -252,6 +264,17 @@ public class RedisChatMemory implements AgentChatMemory {
             }
             digestStore.save(conversationId, newDigest);
             redis.setex(digestKey(conversationId), limits.ttlSeconds(), newDigest);
+            // 画像自动提取：压缩成功后顺带从旧消息里提取长期偏好（旁路，失败不影响压缩）
+            if (profileExtractor != null) {
+                try {
+                    String userId = scopeUser(conversationId);
+                    if (!userId.isEmpty()) {
+                        profileExtractor.extract(userId, decode(raw.subList(0, compressCount)));
+                    }
+                } catch (RuntimeException e) {
+                    log.warn("画像自动提取异常（不影响压缩）: {}", e.getMessage());
+                }
+            }
             redis.ltrim(key, compressCount, -1);
             log.info("记忆已压缩: conversationId={}, 压缩 {} 条, 保留 {} 条, 摘要 {} 字",
                     conversationId, compressCount, limits.keepRecent(), newDigest.length());

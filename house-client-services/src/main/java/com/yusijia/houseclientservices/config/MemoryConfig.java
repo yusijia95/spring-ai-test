@@ -9,7 +9,9 @@ import com.yusijia.houseclientservices.agent.memory.ChatMemoryLimits;
 import com.yusijia.houseclientservices.agent.memory.ChatMessageStore;
 import com.yusijia.houseclientservices.agent.memory.SessionStateStore;
 import com.yusijia.houseclientservices.agent.memory.UserProfileStore;
+import com.yusijia.houseclientservices.agent.memory.ProfileExtractor;
 import com.yusijia.houseclientservices.agent.memory.llm.LlmChatMemoryCompressor;
+import com.yusijia.houseclientservices.agent.memory.llm.LlmProfileExtractor;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatDigestStore;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresChatMessageStore;
 import com.yusijia.houseclientservices.agent.memory.postgres.PostgresUserProfileStore;
@@ -28,6 +30,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
+
+import java.util.Map;
 
 /**
  * 记忆层装配。
@@ -154,12 +158,35 @@ public class MemoryConfig {
         return new LlmChatMemoryCompressor(digestClient, model);
     }
 
+    /**
+     * 画像自动提取器：复用压缩器的便宜模型，在压缩时顺带提取长期偏好。
+     * 关闭时返回一个永远返回空 Map 的实现（旁路能力，不阻塞主流程）。
+     */
+    @Bean
+    public ProfileExtractor profileExtractor(
+            DashScopeChatModel dashScopeChatModel,
+            UserProfileStore userProfileStore,
+            @Value("${agent.memory.profile-extract.enabled:true}") boolean enabled,
+            @Value("${agent.memory.compress.model:qwen-turbo}") String model) {
+        if (!enabled) {
+            return (userId, messages) -> Map.of();
+        }
+        ChatClient extractClient = ChatClient.builder(dashScopeChatModel)
+                .defaultOptions(DashScopeChatOptions.builder()
+                        .model(model)
+                        .temperature(0.0d)
+                        .build())
+                .build();
+        return new LlmProfileExtractor(extractClient, userProfileStore, model);
+    }
+
     @Bean
     public AgentChatMemory chatMemory(RedisOperations redisOperations,
                                       ChatMessageCodec chatMessageCodec,
                                       ChatDigestStore chatDigestStore,
                                       ChatMessageStore chatMessageStore,
                                       ChatMemoryCompressor compressor,
+                                      ProfileExtractor profileExtractor,
                                       @Value("${agent.memory.max-messages:80}") int maxMessages,
                                       @Value("${agent.memory.max-chars:20000}") int maxChars,
                                       @Value("${agent.memory.keep-recent:40}") int keepRecent,
@@ -168,6 +195,7 @@ public class MemoryConfig {
         log.info("对话记忆: Redis 工作记忆(maxMessages={}, maxChars={}, keepRecent={}) + PG 原始消息 + PG 摘要，压缩器={}",
                 maxMessages, maxChars, keepRecent, compressor.getClass().getSimpleName());
         return new RedisChatMemory(redisOperations, chatMessageCodec, chatDigestStore, chatMessageStore,
-                compressor, new ChatMemoryLimits(maxMessages, maxChars, keepRecent, ttlSeconds, lockTtlMillis));
+                compressor, new ChatMemoryLimits(maxMessages, maxChars, keepRecent, ttlSeconds, lockTtlMillis),
+                profileExtractor);
     }
 }

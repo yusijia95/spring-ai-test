@@ -32,6 +32,7 @@ public final class Authorization {
             PermissionPoints.DATA_HOUSE_SEARCH,
             PermissionPoints.DATA_PERSON_SEARCH,
             PermissionPoints.DATA_ORG_SEARCH,
+            PermissionPoints.DATA_PROFILE_READ,
             PermissionPoints.SUBSCRIPTION_READ,
             // 自助客户给自己办认购 / 撤销：权限点放开，"只能操作本人数据"由 DataScope 在工具内兜底
             PermissionPoints.SUBSCRIPTION_CREATE,
@@ -45,6 +46,7 @@ public final class Authorization {
             PermissionPoints.DATA_PERSON_SEARCH,
             PermissionPoints.DATA_PERSON_PHONE_READ,
             PermissionPoints.DATA_ORG_SEARCH,
+            PermissionPoints.DATA_PROFILE_READ,
             PermissionPoints.SUBSCRIPTION_READ,
             PermissionPoints.SUBSCRIPTION_CREATE,
             PermissionPoints.SUBSCRIPTION_CANCEL,
