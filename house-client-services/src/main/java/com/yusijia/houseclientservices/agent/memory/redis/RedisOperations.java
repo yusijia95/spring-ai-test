@@ -38,6 +38,13 @@ public interface RedisOperations {
      */
     boolean setIfAbsent(String key, String value, long ttlMillis);
 
+    /**
+     * SET key value NX EX ttlSeconds（秒级 TTL，幂等键 / 分布式锁用）。
+     *
+     * @return true 表示抢到（key 原本不存在）
+     */
+    boolean setIfAbsentSeconds(String key, String value, long ttlSeconds);
+
     Map<String, String> hgetAll(String key);
 
     void hset(String key, Map<String, String> values);

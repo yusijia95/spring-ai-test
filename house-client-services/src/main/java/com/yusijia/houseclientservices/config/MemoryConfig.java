@@ -30,10 +30,12 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
 
 import java.util.Map;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 记忆层装配。
@@ -169,6 +171,29 @@ public class MemoryConfig {
     }
 
     /**
+     * 画像提取专用线程池：把耗时的 LLM 提取从压缩线程上摘出去，真正异步。
+     * <p>
+     * 为什么必须有界队列 + DiscardPolicy：画像提取是旁路能力，速度永远追不上
+     * "每 5 分钟批量压缩 N 个会话"的提交速度。队列一旦无界，100 个会话 × 3s 的
+     * 任务会堆到 OOM。宁可丢掉一些画像更新（丢的只是"这条偏好晚点再提"），
+     * 也不能把服务器内存撑爆。core=max=4 足够覆盖批量压缩的并发，
+     * 队列 128 个积压任务，再多直接丢弃。
+     */
+    @Bean(destroyMethod = "")
+    public ThreadPoolTaskExecutor asyncProfileTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(128);
+        // 队列满时静默丢弃：画像提取是旁路，丢任务 = 这条偏好晚点再提，不报错
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
+        executor.setThreadNamePrefix("profile-extract-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.initialize();
+        return executor;
+    }
+
+    /**
      * 画像自动提取器：复用压缩器的便宜模型，在压缩时顺带提取长期偏好。
      * 关闭时返回一个永远返回空 Map 的实现（旁路能力，不阻塞主流程）。
      */
@@ -176,6 +201,7 @@ public class MemoryConfig {
     public ProfileExtractor profileExtractor(
             DashScopeChatModel dashScopeChatModel,
             UserProfileStore userProfileStore,
+            RedisOperations redisOperations,
             @Value("${agent.memory.profile-extract.enabled:true}") boolean enabled,
             @Value("${agent.memory.compress.model:qwen-turbo}") String model) {
         if (!enabled) {
@@ -187,7 +213,8 @@ public class MemoryConfig {
                         .temperature(0.0d)
                         .build())
                 .build();
-        return new LlmProfileExtractor(extractClient, userProfileStore, model);
+        // Redis 用于幂等去重（跨实例）+ 按 userId 锁；传 null 时退化为进程内缓存
+        return new LlmProfileExtractor(extractClient, userProfileStore, model, redisOperations);
     }
 
     @Bean
@@ -197,6 +224,7 @@ public class MemoryConfig {
                                       ChatMessageStore chatMessageStore,
                                       ChatMemoryCompressor compressor,
                                       ProfileExtractor profileExtractor,
+                                       ThreadPoolTaskExecutor asyncProfileTaskExecutor,
                                       @Value("${agent.memory.max-messages:80}") int maxMessages,
                                       @Value("${agent.memory.max-chars:20000}") int maxChars,
                                       @Value("${agent.memory.keep-recent:40}") int keepRecent,
@@ -206,6 +234,6 @@ public class MemoryConfig {
                 maxMessages, maxChars, keepRecent, compressor.getClass().getSimpleName());
         return new RedisChatMemory(redisOperations, chatMessageCodec, chatDigestStore, chatMessageStore,
                 compressor, new ChatMemoryLimits(maxMessages, maxChars, keepRecent, ttlSeconds, lockTtlMillis),
-                profileExtractor);
+                profileExtractor, asyncProfileTaskExecutor);
     }
 }

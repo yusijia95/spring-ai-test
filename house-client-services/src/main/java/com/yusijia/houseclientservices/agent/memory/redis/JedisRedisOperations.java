@@ -85,6 +85,13 @@ public class JedisRedisOperations implements RedisOperations {
     }
 
     @Override
+    public boolean setIfAbsentSeconds(String key, String value, long ttlSeconds) {
+        try (Jedis jedis = pool.getResource()) {
+            return "OK".equals(jedis.set(key, value, SetParams.setParams().nx().ex(ttlSeconds)));
+        }
+    }
+
+    @Override
     public Map<String, String> hgetAll(String key) {
         try (Jedis jedis = pool.getResource()) {
             return jedis.hgetAll(key);

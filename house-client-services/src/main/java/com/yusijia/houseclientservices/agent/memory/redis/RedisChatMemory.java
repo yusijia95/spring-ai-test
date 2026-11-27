@@ -13,6 +13,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayDeque;
@@ -55,6 +56,8 @@ public class RedisChatMemory implements AgentChatMemory {
     private final ChatMemoryLimits limits;
     /** 画像提取器（旁路，可为 null 表示不提取） */
     private final ProfileExtractor profileExtractor;
+    /** 画像提取专用线程池：把 LLM 提取从压缩线程上摘出去，真正异步（可为 null 表示同步退化） */
+    private final ThreadPoolTaskExecutor profileExecutor;
 
     /** Redis 不可用时的兜底窗口（单实例语义，不跨实例共享；PG 才是权威副本） */
     private final Map<String, Deque<Message>> localWindow = new ConcurrentHashMap<>();
@@ -69,7 +72,7 @@ public class RedisChatMemory implements AgentChatMemory {
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
                            ChatDigestStore digestStore, ChatMessageStore messageStore,
                            ChatMemoryCompressor compressor, ChatMemoryLimits limits,
-                           ProfileExtractor profileExtractor) {
+                           ProfileExtractor profileExtractor, ThreadPoolTaskExecutor profileExecutor) {
         this.redis = redis;
         this.codec = codec;
         this.digestStore = digestStore;
@@ -77,13 +80,14 @@ public class RedisChatMemory implements AgentChatMemory {
         this.compressor = compressor;
         this.limits = limits;
         this.profileExtractor = profileExtractor;
+        this.profileExecutor = profileExecutor;
     }
 
     /** 兼容旧构造器（无画像提取器） */
     public RedisChatMemory(RedisOperations redis, ChatMessageCodec codec,
                            ChatDigestStore digestStore, ChatMessageStore messageStore,
                            ChatMemoryCompressor compressor, ChatMemoryLimits limits) {
-        this(redis, codec, digestStore, messageStore, compressor, limits, null);
+        this(redis, codec, digestStore, messageStore, compressor, limits, null, null);
     }
 
     @Override
@@ -264,15 +268,18 @@ public class RedisChatMemory implements AgentChatMemory {
             }
             digestStore.save(conversationId, newDigest);
             redis.setex(digestKey(conversationId), limits.ttlSeconds(), newDigest);
-            // 画像自动提取：压缩成功后顺带从旧消息里提取长期偏好（旁路，失败不影响压缩）
+            // 画像自动提取：压缩成功后顺带从旧消息里提取长期偏好（旁路，失败不影响压缩）。
+            // 真正异步：先把 subList 截成独立副本（subList 是视图，原 List 一旦 ltrim 会失效），
+            // 再把耗时的 LLM 提取丢给专用线程池，压缩线程立刻往下走，不被卡 2~5s。
             if (profileExtractor != null) {
                 try {
                     String userId = scopeUser(conversationId);
                     if (!userId.isEmpty()) {
-                        profileExtractor.extract(userId, decode(raw.subList(0, compressCount)));
+                        List<Message> oldMessages = decode(new ArrayList<>(raw.subList(0, compressCount)));
+                        submitProfileExtraction(userId, oldMessages);
                     }
                 } catch (RuntimeException e) {
-                    log.warn("画像自动提取异常（不影响压缩）: {}", e.getMessage());
+                    log.warn("提交画像提取任务异常（不影响压缩）: {}", e.getMessage());
                 }
             }
             redis.ltrim(key, compressCount, -1);
@@ -298,6 +305,33 @@ public class RedisChatMemory implements AgentChatMemory {
             }
         }
         return messages;
+    }
+
+    /**
+     * 把画像提取丢给专用线程池（真正异步）。
+     * <p>
+     * 没有线程池（测试 / 退化场景）时同步执行，保持行为可测；
+     * 有线程池时，提取在后台慢慢跑，队列满时由 DiscardPolicy 静默丢弃
+     * （画像提取是旁路，丢任务 = 这条偏好晚点再提，绝不 OOM）。
+     * 提取内部的幂等去重 + 按 userId 加锁由 {@code LlmProfileExtractor} 负责。
+     */
+    private void submitProfileExtraction(String userId, List<Message> oldMessages) {
+        if (profileExecutor == null) {
+            try {
+                profileExtractor.extract(userId, oldMessages);
+            } catch (RuntimeException e) {
+                log.warn("画像自动提取异常（不影响压缩）: {}", e.getMessage());
+            }
+            return;
+        }
+        profileExecutor.execute(() -> {
+            try {
+                profileExtractor.extract(userId, oldMessages);
+            } catch (RuntimeException e) {
+                // 旁路能力：异步线程里的异常只记日志，不能冒泡到线程池
+                log.warn("异步画像自动提取异常（已忽略，不影响主流程）: userId={}", userId, e);
+            }
+        });
     }
 
     /** A3：摘要输入侧脱敏（只用于喂给摘要模型，工作记忆窗口本身不动） */

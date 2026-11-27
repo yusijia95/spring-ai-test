@@ -110,6 +110,17 @@ public class FakeRedisOperations implements RedisOperations {
     }
 
     @Override
+    public boolean setIfAbsentSeconds(String key, String value, long ttlSeconds) {
+        check();
+        if (strings.containsKey(key)) {
+            return false;
+        }
+        strings.put(key, value);
+        lockedKeys.add(key);
+        return true;
+    }
+
+    @Override
     public Map<String, String> hgetAll(String key) {
         check();
         return new LinkedHashMap<>(hashes.getOrDefault(key, Map.of()));
